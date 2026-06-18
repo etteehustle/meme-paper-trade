@@ -442,9 +442,7 @@ function App() {
               role="timer"
               style={refreshIndicatorStyle}
               title={`Refresh sau ${refreshSeconds}s`}
-            >
-              <span>{refreshSeconds}</span>
-            </span>
+            />
           ) : null}
         </div>
       </form>

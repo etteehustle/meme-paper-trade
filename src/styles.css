@@ -326,17 +326,6 @@ td small,
   width: 5px;
 }
 
-.refresh-indicator span {
-  color: var(--text);
-  font-size: 10px;
-  font-weight: 760;
-  line-height: 1;
-  position: relative;
-  transform: rotate(var(--refresh-counter-rotation));
-  transition: transform 140ms linear;
-  z-index: 1;
-}
-
 .alert {
   border-radius: 8px;
   font-size: 13px;
