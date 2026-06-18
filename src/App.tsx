@@ -619,8 +619,10 @@ function App() {
             {trades.length === 0 ? <p className="empty">Fills sẽ hiện ở đây.</p> : trades.slice(0, 8).map((trade) => (
               <div className="fill" key={trade.id}>
                 <strong className={trade.side === "buy" ? "buy-text" : "sell-text"}>{trade.side.toUpperCase()} {trade.tokenSymbol}</strong>
-                <span>{fmtSol(trade.priceSol)}</span>
-                <small>{trade.type} / fee {fmtSol(trade.feesSol)}</small>
+                <div>
+                  <span>{priceToMarketCapLabel(trade.priceSol, quote?.address === trade.tokenAddress ? quote : null)}</span>
+                  <small>{trade.type} / {dateLabel(trade.createdAt)}</small>
+                </div>
                 {trade.realizedPnlSol !== undefined ? <em className={trade.realizedPnlSol >= 0 ? "positive" : "negative"}>{displayValue(trade.realizedPnlSol)}</em> : null}
               </div>
             ))}
