@@ -38,6 +38,7 @@ html {
   background: var(--canvas);
   min-height: 100%;
   overflow-y: scroll;
+  -webkit-text-size-adjust: 100%;
   scrollbar-color: #5f553f var(--canvas);
   scrollbar-gutter: stable;
   scrollbar-width: thin;
@@ -95,6 +96,16 @@ body::before {
 button,
 input {
   font: inherit;
+}
+
+button,
+a,
+input,
+select,
+textarea,
+[role="button"],
+[contenteditable="true"] {
+  touch-action: manipulation;
 }
 
 button {
@@ -202,7 +213,11 @@ input::placeholder {
 
 .app-shell {
   min-height: 100dvh;
-  padding: 18px;
+  padding:
+    max(18px, env(safe-area-inset-top))
+    max(18px, env(safe-area-inset-right))
+    max(18px, env(safe-area-inset-bottom))
+    max(18px, env(safe-area-inset-left));
   width: 100%;
 }
 
@@ -210,7 +225,11 @@ input::placeholder {
   align-items: center;
   display: grid;
   min-height: 100dvh;
-  padding: 24px;
+  padding:
+    max(24px, env(safe-area-inset-top))
+    max(24px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom))
+    max(24px, env(safe-area-inset-left));
   width: 100%;
 }
 
@@ -840,16 +859,24 @@ tbody tr:hover {
 
 @media (max-width: 760px) {
   .app-shell {
-    padding: 10px;
+    padding:
+      max(10px, env(safe-area-inset-top))
+      max(10px, env(safe-area-inset-right))
+      max(10px, env(safe-area-inset-bottom))
+      max(10px, env(safe-area-inset-left));
   }
 
   .login-shell {
     align-items: start;
-    padding: 18px;
+    padding:
+      max(18px, env(safe-area-inset-top))
+      max(18px, env(safe-area-inset-right))
+      max(18px, env(safe-area-inset-bottom))
+      max(18px, env(safe-area-inset-left));
   }
 
   .login-card {
-    margin-top: 12vh;
+    margin-top: 12dvh;
     padding: 22px;
   }
 
@@ -919,6 +946,14 @@ tbody tr:hover {
 
   button {
     min-height: 44px;
+  }
+
+  input,
+  select,
+  textarea,
+  [contenteditable="true"] {
+    font-size: 16px;
+    line-height: 1.25;
   }
 
   .order-row {
