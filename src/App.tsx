@@ -371,9 +371,7 @@ function App() {
   const quoteMarketCap = currentMarketCapUsd(quote);
   const limitBuyPrice = marketCapToPriceSol(limitBuyMarketCapUsd, quote);
   const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, quote);
-  const currentPriceLine = quote
-    ? `${fmtSol(quote.priceSol)}${quote.priceUsd ? ` / ${fmtUsd(quote.priceUsd)}` : ""}`
-    : "Paste CA để load giá";
+  const currentMarketCapLine = quoteMarketCap ? `MC ${fmtCompactUsd(quoteMarketCap)}` : "Paste CA để load MC";
 
   return (
     <main className="app-shell">
@@ -403,9 +401,9 @@ function App() {
         </label>
         <button type="submit" disabled={loadingQuote}>{loadingQuote ? "Loading..." : "Load price"}</button>
         <div className="price-ticker">
-          <span>{quote?.symbol ?? "TOKEN"}</span>
-          <strong>{currentPriceLine}</strong>
-          <small>{quote ? `Updated ${dateLabel(quote.updatedAt)}` : solUsd ? `SOL ${fmtUsd(solUsd)}` : "SOL/USD loading"}</small>
+          <span>{quote?.symbol ?? "Current MC"}</span>
+          <strong>{currentMarketCapLine}</strong>
+          <small>{quote ? `Updated ${dateLabel(quote.updatedAt)}` : "MC loading"}</small>
         </div>
       </form>
 
