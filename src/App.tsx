@@ -38,6 +38,9 @@ const orderLimitLabel = (order: LimitOrder, quote: TokenQuote | null) => {
   const marketCapUsd = order.limitMarketCapUsd ?? priceToMarketCapUsd(order.limitPriceSol, quote);
   return marketCapUsd ? `MC ${fmtCompactUsd(marketCapUsd)}` : fmtSol(order.limitPriceSol);
 };
+const orderEntryNote = (order: LimitOrder, quote: TokenQuote | null) => {
+  return `Entry ${orderLimitLabel(order, quote)} / ${dateLabel(order.createdAt)}`;
+};
 
 function NumberInput({
   label,
@@ -554,7 +557,7 @@ function App() {
                 <strong className={order.side === "buy" ? "buy-text" : "sell-text"}>{order.side.toUpperCase()} {order.tokenSymbol}</strong>
                 <span>@ {orderLimitLabel(order, quote)}</span>
                 <span>{order.side === "buy" ? `${fmtSol(order.capitalSol ?? 0)} capital` : `${fmtPct(order.sellPercent ?? 0)} position`}</span>
-                <small>{order.note || `Implied ${fmtSol(order.limitPriceSol)} / ${dateLabel(order.createdAt)}`}</small>
+                <small>{orderEntryNote(order, quote)}</small>
                 <button type="button" className="ghost" onClick={() => cancelOrder(order.id)}>Cancel</button>
               </div>
             ))}
