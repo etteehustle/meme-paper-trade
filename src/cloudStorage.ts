@@ -56,6 +56,15 @@ const stateToRow = (userId: string, state: PaperTradeState) => ({
   last_address: state.lastAddress,
 });
 
+const authRedirectUrl = () => {
+  const configuredUrl = import.meta.env.VITE_AUTH_REDIRECT_URL;
+  if (configuredUrl) return configuredUrl;
+  if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+    return "https://meme-paper-trade.vercel.app";
+  }
+  return window.location.origin;
+};
+
 export const ensureCloudUser = async () => {
   if (!supabase) throw new Error("Supabase is not configured.");
 
@@ -68,17 +77,33 @@ export const ensureCloudUser = async () => {
   return null;
 };
 
-export const sendCloudLoginLink = async (email: string) => {
+export const signInCloud = async (email: string, password: string) => {
   if (!supabase) throw new Error("Supabase is not configured.");
 
-  const { error } = await supabase.auth.signInWithOtp({
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  if (!user) throw new Error("Could not sign in.");
+  return user;
+};
+
+export const signUpCloud = async (email: string, password: string) => {
+  if (!supabase) throw new Error("Supabase is not configured.");
+
+  const {
+    data: { session, user },
+    error,
+  } = await supabase.auth.signUp({
     email,
+    password,
     options: {
-      emailRedirectTo: window.location.origin,
-      shouldCreateUser: true,
+      emailRedirectTo: authRedirectUrl(),
     },
   });
   if (error) throw error;
+  return { session, user };
 };
 
 export const signOutCloud = async () => {

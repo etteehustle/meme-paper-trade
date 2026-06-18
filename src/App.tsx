@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { loadCloudState, saveCloudState, sendCloudLoginLink, signOutCloud } from "./cloudStorage";
+import { loadCloudState, saveCloudState, signInCloud, signOutCloud, signUpCloud } from "./cloudStorage";
 import { fetchSolUsd, fetchTokenQuote } from "./priceApi";
 import { applyBuy, applySell, executionPriceFor, shouldFill, totalFees, totalsForPosition, uid } from "./trading";
 import { loadAccount, loadFees, loadLastAddress, loadLocalState, loadOrders, loadPositions, loadTrades, loadUsdMode, saveJson } from "./storage";
@@ -109,6 +109,7 @@ function App() {
   const [loginFeedback, setLoginFeedback] = useState("");
   const [cloudUserId, setCloudUserId] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
   const fillLockRef = useRef(false);
   const initialLoadRef = useRef(false);
@@ -204,21 +205,60 @@ function App() {
     };
   }, []);
 
-  const requestLoginLink = async (event: FormEvent) => {
+  const hydrateAfterAuth = async () => {
+    const result = await loadCloudState(loadLocalState());
+    cloudReadyRef.current = true;
+    setCloudUserId(result.userId);
+    setPositions(result.state.positions);
+    setOrders(result.state.orders);
+    setTrades(result.state.trades);
+    setFees(result.state.fees);
+    setAccount(result.state.account);
+    setCapitalInput(result.state.account.startingCapitalSol);
+    setUsdMode(result.state.usdMode);
+    setContractAddress(result.state.lastAddress);
+    setSyncStatus("synced");
+    setSyncMessage(result.migrated ? "DB synced from local" : "DB synced");
+  };
+
+  const signInWithPassword = async (event: FormEvent) => {
     event.preventDefault();
-    if (!loginEmail.trim()) return;
+    if (!loginEmail.trim() || !loginPassword) return;
 
     setAuthBusy(true);
     try {
-      await sendCloudLoginLink(loginEmail.trim());
-      setSyncStatus("sent");
-      setSyncMessage("Check your email for login link");
-      setLoginFeedback("Đã gửi link đăng nhập. Kiểm tra email của bạn.");
+      await signInCloud(loginEmail.trim(), loginPassword);
+      await hydrateAfterAuth();
+      setLoginFeedback("");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Login error";
       setSyncStatus("error");
       setSyncMessage(`Login error: ${message}`);
-      setLoginFeedback(`Không gửi được login link: ${message}`);
+      setLoginFeedback(`Login failed: ${message}`);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const createAccount = async () => {
+    if (!loginEmail.trim() || !loginPassword) return;
+
+    setAuthBusy(true);
+    try {
+      const result = await signUpCloud(loginEmail.trim(), loginPassword);
+      if (result.session) {
+        await hydrateAfterAuth();
+        setLoginFeedback("");
+      } else {
+        setSyncStatus("sent");
+        setSyncMessage("Confirm email before login");
+        setLoginFeedback("Account created. Please confirm your email once, then come back and press Login.");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Create account error";
+      setSyncStatus("error");
+      setSyncMessage(`Signup error: ${message}`);
+      setLoginFeedback(`Create account failed: ${message}`);
     } finally {
       setAuthBusy(false);
     }
@@ -525,10 +565,10 @@ function App() {
           <div>
             <p className="eyebrow">Paper trade journal</p>
             <h1>Solana Meme Paper Trade</h1>
-            <p className="login-copy">Đăng nhập bằng email để đồng bộ vốn, vị thế, lệnh chờ và lịch sử fill trên database Supabase.</p>
+            <p className="login-copy">Login bằng email và password để đồng bộ vốn, vị thế, lệnh chờ và lịch sử fill trên database Supabase.</p>
           </div>
 
-          <form className="login-form" onSubmit={requestLoginLink}>
+          <form className="login-form" onSubmit={signInWithPassword}>
             <label htmlFor="login-email">
               Email
               <input
@@ -540,8 +580,28 @@ function App() {
                 onChange={(event) => setLoginEmail(event.target.value)}
               />
             </label>
-            <button type="submit" disabled={authBusy || !loginEmail.trim()}>
-              {authBusy ? "Sending..." : "Send login link"}
+            <label htmlFor="login-password">
+              Password
+              <input
+                id="login-password"
+                autoComplete="current-password"
+                minLength={6}
+                placeholder="At least 6 characters"
+                type="password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+              />
+            </label>
+            <button type="submit" disabled={authBusy || !loginEmail.trim() || !loginPassword}>
+              {authBusy ? "Working..." : "Login"}
+            </button>
+            <button
+              type="button"
+              className="ghost"
+              disabled={authBusy || !loginEmail.trim() || loginPassword.length < 6}
+              onClick={createAccount}
+            >
+              Create account
             </button>
           </form>
 
