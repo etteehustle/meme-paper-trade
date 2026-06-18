@@ -82,7 +82,8 @@ button:disabled {
 
 .app-shell {
   min-height: 100dvh;
-  padding: 24px;
+  padding: 24px 32px;
+  width: 100%;
 }
 
 .topbar {
@@ -90,8 +91,8 @@ button:disabled {
   display: flex;
   gap: 24px;
   justify-content: space-between;
-  margin: 0 auto 16px;
-  max-width: 1320px;
+  margin: 0 0 16px;
+  width: 100%;
 }
 
 h1,
@@ -173,10 +174,10 @@ h3 {
   align-items: end;
   display: grid;
   gap: 12px;
-  grid-template-columns: minmax(260px, 1fr) auto minmax(230px, 330px);
-  margin: 0 auto 12px;
-  max-width: 1320px;
+  grid-template-columns: minmax(360px, 1fr) auto minmax(260px, 360px);
+  margin: 0 0 12px;
   padding: 14px;
+  width: 100%;
 }
 
 .address-bar label,
@@ -254,9 +255,9 @@ td small,
   border-radius: 8px;
   font-size: 13px;
   font-weight: 650;
-  margin: 0 auto 12px;
-  max-width: 1320px;
+  margin: 0 0 12px;
   padding: 10px 12px;
+  width: 100%;
 }
 
 .alert.error {
@@ -273,10 +274,10 @@ td small,
   align-items: stretch;
   display: grid;
   gap: 12px;
-  grid-template-columns: 300px 1fr;
-  margin: 0 auto 12px;
-  max-width: 1320px;
+  grid-template-columns: minmax(320px, 420px) 1fr;
+  margin: 0 0 12px;
   padding: 14px;
+  width: 100%;
 }
 
 .capital-control {
@@ -329,9 +330,9 @@ th {
 .grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: 300px minmax(500px, 1fr) 330px;
-  margin: 0 auto;
-  max-width: 1320px;
+  grid-template-columns: minmax(320px, 360px) minmax(620px, 1fr) minmax(340px, 380px);
+  margin: 0;
+  width: 100%;
 }
 
 .panel {
