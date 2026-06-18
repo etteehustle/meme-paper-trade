@@ -77,3 +77,13 @@ export type TradeEvent = {
   feesSol: number;
   realizedPnlSol?: number;
 };
+
+export type PaperTradeState = {
+  positions: Position[];
+  orders: LimitOrder[];
+  trades: TradeEvent[];
+  fees: FeeConfig;
+  account: AccountState;
+  usdMode: boolean;
+  lastAddress: string;
+};

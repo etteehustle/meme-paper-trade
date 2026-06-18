@@ -1,4 +1,4 @@
-import type { AccountState, FeeConfig, LimitOrder, Position, TradeEvent } from "./types";
+import type { AccountState, FeeConfig, LimitOrder, PaperTradeState, Position, TradeEvent } from "./types";
 
 const read = <T,>(key: string, fallback: T): T => {
   try {
@@ -16,6 +16,16 @@ export const loadFees = () => read<FeeConfig>("mpt.fees", { slippagePct: 1, brib
 export const loadUsdMode = () => read<boolean>("mpt.usdMode", true);
 export const loadLastAddress = () => read<string>("mpt.lastAddress", "");
 export const loadAccount = () => read<AccountState>("mpt.account", { startingCapitalSol: 5, cashSol: 5 });
+
+export const loadLocalState = (): PaperTradeState => ({
+  positions: loadPositions(),
+  orders: loadOrders(),
+  trades: loadTrades(),
+  fees: loadFees(),
+  account: loadAccount(),
+  usdMode: loadUsdMode(),
+  lastAddress: loadLastAddress(),
+});
 
 export const saveJson = (key: string, value: unknown) => {
   localStorage.setItem(key, JSON.stringify(value));

@@ -171,6 +171,47 @@ h3 {
   justify-content: flex-end;
 }
 
+.sync-pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  max-width: 180px;
+  overflow: hidden;
+  padding: 9px 12px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.sync-pill.synced {
+  border-color: rgba(147, 213, 166, 0.38);
+  color: var(--positive);
+}
+
+.sync-pill.saving,
+.sync-pill.connecting {
+  border-color: rgba(185, 161, 129, 0.35);
+  color: var(--accent);
+}
+
+.sync-pill.error,
+.sync-pill.local {
+  border-color: rgba(255, 165, 165, 0.35);
+  color: var(--negative);
+}
+
+.sync-login {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(150px, 220px) auto;
+}
+
+.sync-login input {
+  min-height: 40px;
+}
+
 .toggle.active {
   background: #201b14;
   border-color: #6f5d44;
@@ -667,6 +708,17 @@ td {
     display: grid;
     grid-template-columns: 1fr 1fr;
     min-width: 0;
+  }
+
+  .sync-pill {
+    grid-column: 1 / -1;
+    max-width: none;
+    text-align: center;
+  }
+
+  .sync-login {
+    grid-column: 1 / -1;
+    grid-template-columns: 1fr auto;
   }
 
   .address-bar,

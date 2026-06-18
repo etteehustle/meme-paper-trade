@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
+import { loadCloudState, saveCloudState, sendCloudLoginLink, signOutCloud } from "./cloudStorage";
 import { fetchSolUsd, fetchTokenQuote } from "./priceApi";
 import { applyBuy, applySell, executionPriceFor, shouldFill, totalFees, totalsForPosition, uid } from "./trading";
-import { loadAccount, loadFees, loadLastAddress, loadOrders, loadPositions, loadTrades, loadUsdMode, saveJson } from "./storage";
-import type { AccountState, FeeConfig, LimitOrder, Position, TokenQuote, TradeEvent } from "./types";
+import { loadAccount, loadFees, loadLastAddress, loadLocalState, loadOrders, loadPositions, loadTrades, loadUsdMode, saveJson } from "./storage";
+import type { AccountState, FeeConfig, LimitOrder, PaperTradeState, Position, TokenQuote, TradeEvent } from "./types";
 
 const fmt = (value: number, digits = 4) =>
   new Intl.NumberFormat("en-US", {
@@ -103,8 +104,15 @@ function App() {
   const [sellSizingMode, setSellSizingMode] = useState<"percent" | "value">("percent");
   const [notice, setNotice] = useState("");
   const [refreshRemainingMs, setRefreshRemainingMs] = useState(refreshIntervalMs);
+  const [syncStatus, setSyncStatus] = useState<"connecting" | "synced" | "saving" | "local" | "error">("connecting");
+  const [syncMessage, setSyncMessage] = useState("Connecting DB");
+  const [cloudUserId, setCloudUserId] = useState("");
+  const [loginEmail, setLoginEmail] = useState("");
+  const [authBusy, setAuthBusy] = useState(false);
   const fillLockRef = useRef(false);
   const initialLoadRef = useRef(false);
+  const cloudReadyRef = useRef(false);
+  const saveTimerRef = useRef<number | null>(null);
 
   const selectedPosition = useMemo(
     () => (quote ? positions.find((position) => position.tokenAddress === quote.address) : undefined),
@@ -134,6 +142,18 @@ function App() {
     },
     [solUsd, usdMode],
   );
+  const paperTradeState = useMemo<PaperTradeState>(
+    () => ({
+      positions,
+      orders,
+      trades,
+      fees,
+      account,
+      usdMode,
+      lastAddress: contractAddress,
+    }),
+    [account, contractAddress, fees, orders, positions, trades, usdMode],
+  );
 
   useEffect(() => saveJson("mpt.positions", positions), [positions]);
   useEffect(() => saveJson("mpt.orders", orders), [orders]);
@@ -142,6 +162,97 @@ function App() {
   useEffect(() => saveJson("mpt.account", account), [account]);
   useEffect(() => saveJson("mpt.usdMode", usdMode), [usdMode]);
   useEffect(() => saveJson("mpt.lastAddress", contractAddress), [contractAddress]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateCloudState = async () => {
+      try {
+        setSyncStatus("connecting");
+        setSyncMessage("Connecting DB");
+        const result = await loadCloudState(loadLocalState());
+        if (cancelled) return;
+
+        cloudReadyRef.current = true;
+        setCloudUserId(result.userId);
+        setPositions(result.state.positions);
+        setOrders(result.state.orders);
+        setTrades(result.state.trades);
+        setFees(result.state.fees);
+        setAccount(result.state.account);
+        setCapitalInput(result.state.account.startingCapitalSol);
+        setUsdMode(result.state.usdMode);
+        setContractAddress(result.state.lastAddress);
+        setSyncStatus("synced");
+        setSyncMessage(result.migrated ? "DB synced from local" : "DB synced");
+      } catch (error) {
+        if (cancelled) return;
+        cloudReadyRef.current = false;
+        setSyncStatus("local");
+        setSyncMessage(error instanceof Error ? `Local cache: ${error.message}` : "Local cache");
+      }
+    };
+
+    hydrateCloudState();
+
+    return () => {
+      cancelled = true;
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+  }, []);
+
+  const requestLoginLink = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!loginEmail.trim()) return;
+
+    setAuthBusy(true);
+    try {
+      await sendCloudLoginLink(loginEmail.trim());
+      setSyncStatus("local");
+      setSyncMessage("Check email to sync DB");
+    } catch (error) {
+      setSyncStatus("error");
+      setSyncMessage(error instanceof Error ? `Login error: ${error.message}` : "Login error");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  const signOutFromCloud = async () => {
+    setAuthBusy(true);
+    try {
+      await signOutCloud();
+      cloudReadyRef.current = false;
+      setCloudUserId("");
+      setSyncStatus("local");
+      setSyncMessage("Signed out - local cache");
+    } catch (error) {
+      setSyncStatus("error");
+      setSyncMessage(error instanceof Error ? `Logout error: ${error.message}` : "Logout error");
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!cloudReadyRef.current) return;
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+
+    setSyncStatus("saving");
+    setSyncMessage("DB saving");
+    saveTimerRef.current = window.setTimeout(() => {
+      saveCloudState(paperTradeState)
+        .then((userId) => {
+          setCloudUserId(userId);
+          setSyncStatus("synced");
+          setSyncMessage("DB synced");
+        })
+        .catch((error) => {
+          setSyncStatus("error");
+          setSyncMessage(error instanceof Error ? `DB error: ${error.message}` : "DB error");
+        });
+    }, 500);
+  }, [paperTradeState]);
 
   const refreshSol = useCallback(async () => {
     const next = await fetchSolUsd();
@@ -409,6 +520,25 @@ function App() {
           <p>Tập vào/ra lệnh bằng SOL, có slippage, fee và PnL theo từng vị thế.</p>
         </div>
         <div className="top-actions">
+          <span className={`sync-pill ${syncStatus}`} title={cloudUserId ? `Supabase user ${cloudUserId}` : syncMessage}>
+            {syncMessage}
+          </span>
+          {cloudUserId ? (
+            <button type="button" className="ghost" disabled={authBusy} onClick={signOutFromCloud}>Sign out DB</button>
+          ) : (
+            <form className="sync-login" onSubmit={requestLoginLink}>
+              <input
+                aria-label="Email sync"
+                placeholder="Email sync"
+                type="email"
+                value={loginEmail}
+                onChange={(event) => setLoginEmail(event.target.value)}
+              />
+              <button type="submit" className="ghost" disabled={authBusy || !loginEmail.trim()}>
+                {authBusy ? "Sending..." : "Login DB"}
+              </button>
+            </form>
+          )}
           <button type="button" className={usdMode ? "toggle active" : "toggle"} onClick={() => setUsdMode((current) => !current)}>
             {usdMode ? "Xem USD" : "Xem SOL"}
           </button>
