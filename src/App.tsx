@@ -156,8 +156,8 @@ function App() {
         setQuote(next);
         setContractAddress(next.address);
         if (nextMarketCap) {
-          setLimitBuyMarketCapUsd((current) => current || nextMarketCap * 0.9);
-          setLimitSellMarketCapUsd((current) => current || nextMarketCap * 1.25);
+          setLimitBuyMarketCapUsd(nextMarketCap);
+          setLimitSellMarketCapUsd(nextMarketCap);
         }
       } catch (error) {
         setQuoteError(error instanceof Error ? error.message : "Không lấy được giá token.");
