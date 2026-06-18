@@ -30,6 +30,10 @@ const priceToMarketCapUsd = (priceSol: number, quote: TokenQuote | null) => {
   if (!quote || !currentMc || quote.priceSol <= 0 || priceSol <= 0) return null;
   return currentMc * (priceSol / quote.priceSol);
 };
+const priceToMarketCapLabel = (priceSol: number, quote: TokenQuote | null) => {
+  const marketCapUsd = priceToMarketCapUsd(priceSol, quote);
+  return marketCapUsd ? `MC ${fmtCompactUsd(marketCapUsd)}` : fmtSol(priceSol);
+};
 const orderLimitLabel = (order: LimitOrder, quote: TokenQuote | null) => {
   const marketCapUsd = order.limitMarketCapUsd ?? priceToMarketCapUsd(order.limitPriceSol, quote);
   return marketCapUsd ? `MC ${fmtCompactUsd(marketCapUsd)}` : fmtSol(order.limitPriceSol);
@@ -519,7 +523,10 @@ function App() {
                           <small>{position.tokenAddress.slice(0, 4)}...{position.tokenAddress.slice(-4)}</small>
                         </td>
                         <td>{fmt(totals.tokenAmount, 4)}</td>
-                        <td>{fmtSol(totals.avgEntrySol)}</td>
+                        <td>
+                          {priceToMarketCapLabel(totals.avgEntrySol, isSelected ? quote : null)}
+                          {isSelected ? <small>{fmtSol(totals.avgEntrySol)}</small> : null}
+                        </td>
                         <td>{current ? displayValue(totals.marketValueSol) : "Load price"}</td>
                         <td>
                           {current ? (
@@ -570,8 +577,8 @@ function App() {
             </div>
             <div>
               <span>Entry basis</span>
-              <strong>{fmtSol(selectedTotals.avgEntrySol)}</strong>
-              <small>{selectedPosition?.lots.length ?? 0} buy lots</small>
+              <strong>{priceToMarketCapLabel(selectedTotals.avgEntrySol, quote)}</strong>
+              <small>{fmtSol(selectedTotals.avgEntrySol)} / {selectedPosition?.lots.length ?? 0} buy lots</small>
             </div>
             <div>
               <span>Position value</span>
@@ -595,11 +602,13 @@ function App() {
                 </div>
                 <div>
                   <span>Entry</span>
-                  <strong>{fmtSol(lot.entryPriceSol)}</strong>
+                  <strong>{priceToMarketCapLabel(lot.entryPriceSol, quote)}</strong>
+                  <small>{fmtSol(lot.entryPriceSol)}</small>
                 </div>
                 <div>
                   <span>Basis</span>
-                  <strong>{fmtSol(lot.costBasisSol / lot.tokenAmount)}</strong>
+                  <strong>{priceToMarketCapLabel(lot.costBasisSol / lot.tokenAmount, quote)}</strong>
+                  <small>{fmtSol(lot.costBasisSol / lot.tokenAmount)}</small>
                 </div>
               </div>
             ))}

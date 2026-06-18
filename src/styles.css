@@ -523,6 +523,16 @@ td {
   grid-template-columns: 1.2fr 1fr 1fr;
 }
 
+.lot span,
+.lot strong {
+  display: block;
+}
+
+.lot strong {
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
 .fill {
   grid-template-columns: 86px 1fr;
 }
