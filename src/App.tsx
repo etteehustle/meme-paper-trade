@@ -1,0 +1,628 @@
+import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { fetchSolUsd, fetchTokenQuote } from "./priceApi";
+import { applyBuy, applySell, executionPriceFor, shouldFill, totalFees, totalsForPosition, uid } from "./trading";
+import { loadAccount, loadFees, loadLastAddress, loadOrders, loadPositions, loadTrades, loadUsdMode, saveJson } from "./storage";
+import type { AccountState, FeeConfig, LimitOrder, Position, TokenQuote, TradeEvent } from "./types";
+
+const fmt = (value: number, digits = 4) =>
+  new Intl.NumberFormat("en-US", {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: value > 0 && value < 1 ? Math.min(digits, 8) : 0,
+  }).format(Number.isFinite(value) ? value : 0);
+
+const fmtSol = (value: number) => `${fmt(value, value < 0.01 ? 8 : 4)} SOL`;
+const fmtUsd = (value: number) => `$${fmt(value, value < 1 ? 6 : 2)}`;
+const fmtCompactUsd = (value: number) =>
+  new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: value < 1_000_000 ? 2 : 1,
+  }).format(Number.isFinite(value) ? value : 0);
+const fmtPct = (value: number) => `${value >= 0 ? "+" : ""}${fmt(value, 2)}%`;
+const dateLabel = (value: number) => new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }).format(value);
+const currentMarketCapUsd = (quote: TokenQuote | null) => quote?.marketCapUsd ?? quote?.fdvUsd ?? null;
+const marketCapToPriceSol = (marketCapUsd: number, quote: TokenQuote | null) => {
+  const currentMc = currentMarketCapUsd(quote);
+  if (!quote || !currentMc || currentMc <= 0 || marketCapUsd <= 0) return 0;
+  return quote.priceSol * (marketCapUsd / currentMc);
+};
+const priceToMarketCapUsd = (priceSol: number, quote: TokenQuote | null) => {
+  const currentMc = currentMarketCapUsd(quote);
+  if (!quote || !currentMc || quote.priceSol <= 0 || priceSol <= 0) return null;
+  return currentMc * (priceSol / quote.priceSol);
+};
+const orderLimitLabel = (order: LimitOrder, quote: TokenQuote | null) => {
+  const marketCapUsd = order.limitMarketCapUsd ?? priceToMarketCapUsd(order.limitPriceSol, quote);
+  return marketCapUsd ? `MC ${fmtCompactUsd(marketCapUsd)}` : fmtSol(order.limitPriceSol);
+};
+
+function NumberInput({
+  label,
+  value,
+  onChange,
+  min = 0,
+  step = "any",
+  suffix,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+  step?: string;
+  suffix?: string;
+}) {
+  const id = useId();
+
+  return (
+    <label className="field" htmlFor={id}>
+      <span>{label}</span>
+      <div className="input-shell">
+        <input
+          id={id}
+          name={id}
+          type="number"
+          min={min}
+          step={step}
+          value={Number.isFinite(value) ? value : 0}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        {suffix ? <strong>{suffix}</strong> : null}
+      </div>
+    </label>
+  );
+}
+
+function App() {
+  const [contractAddress, setContractAddress] = useState(() => loadLastAddress());
+  const [quote, setQuote] = useState<TokenQuote | null>(null);
+  const [solUsd, setSolUsd] = useState<number | null>(null);
+  const [loadingQuote, setLoadingQuote] = useState(false);
+  const [quoteError, setQuoteError] = useState("");
+  const [positions, setPositions] = useState<Position[]>(() => loadPositions());
+  const [orders, setOrders] = useState<LimitOrder[]>(() => loadOrders());
+  const [trades, setTrades] = useState<TradeEvent[]>(() => loadTrades());
+  const [fees, setFees] = useState<FeeConfig>(() => loadFees());
+  const [account, setAccount] = useState<AccountState>(() => loadAccount());
+  const [capitalInput, setCapitalInput] = useState(() => loadAccount().startingCapitalSol);
+  const [usdMode, setUsdMode] = useState(() => loadUsdMode());
+  const [buyCapital, setBuyCapital] = useState(1);
+  const [sellPercent, setSellPercent] = useState(25);
+  const [limitBuyMarketCapUsd, setLimitBuyMarketCapUsd] = useState(0);
+  const [limitBuyCapital, setLimitBuyCapital] = useState(1);
+  const [limitSellMarketCapUsd, setLimitSellMarketCapUsd] = useState(0);
+  const [limitSellPercent, setLimitSellPercent] = useState(25);
+  const [limitSellValue, setLimitSellValue] = useState(0);
+  const [sellSizingMode, setSellSizingMode] = useState<"percent" | "value">("percent");
+  const [notice, setNotice] = useState("");
+  const fillLockRef = useRef(false);
+  const initialLoadRef = useRef(false);
+
+  const selectedPosition = useMemo(
+    () => (quote ? positions.find((position) => position.tokenAddress === quote.address) : undefined),
+    [positions, quote],
+  );
+  const selectedTotals = useMemo(() => totalsForPosition(selectedPosition, quote?.priceSol), [selectedPosition, quote?.priceSol]);
+  const openOrders = useMemo(() => orders.filter((order) => order.status === "open"), [orders]);
+  const selectedOrders = useMemo(() => (quote ? openOrders.filter((order) => order.tokenAddress === quote.address) : []), [openOrders, quote]);
+  const reservedSol = useMemo(
+    () => openOrders.reduce((sum, order) => sum + (order.side === "buy" ? order.reservedSol ?? order.capitalSol ?? 0 : 0), 0),
+    [openOrders],
+  );
+  const totalPositionValueSol = useMemo(() => {
+    return positions.reduce((sum, position) => {
+      const currentPrice = quote?.address === position.tokenAddress ? quote.priceSol : undefined;
+      const totals = totalsForPosition(position, currentPrice);
+      return sum + (currentPrice ? totals.marketValueSol : totals.costBasisSol);
+    }, 0);
+  }, [positions, quote]);
+  const equitySol = account.cashSol + reservedSol + totalPositionValueSol;
+  const accountPnlSol = equitySol - account.startingCapitalSol;
+  const currentOrderFeesSol = totalFees(fees);
+
+  const displayValue = useCallback(
+    (solValue: number) => {
+      if (usdMode && solUsd) return fmtUsd(solValue * solUsd);
+      return fmtSol(solValue);
+    },
+    [solUsd, usdMode],
+  );
+
+  useEffect(() => saveJson("mpt.positions", positions), [positions]);
+  useEffect(() => saveJson("mpt.orders", orders), [orders]);
+  useEffect(() => saveJson("mpt.trades", trades), [trades]);
+  useEffect(() => saveJson("mpt.fees", fees), [fees]);
+  useEffect(() => saveJson("mpt.account", account), [account]);
+  useEffect(() => saveJson("mpt.usdMode", usdMode), [usdMode]);
+  useEffect(() => saveJson("mpt.lastAddress", contractAddress), [contractAddress]);
+
+  const refreshSol = useCallback(async () => {
+    const next = await fetchSolUsd();
+    if (next) setSolUsd(next);
+  }, []);
+
+  const refreshQuote = useCallback(
+    async (address = contractAddress) => {
+      if (!address.trim()) return;
+      setLoadingQuote(true);
+      setQuoteError("");
+      try {
+        const next = await fetchTokenQuote(address, solUsd ?? undefined);
+        const nextMarketCap = currentMarketCapUsd(next);
+        setQuote(next);
+        setContractAddress(next.address);
+        if (nextMarketCap) {
+          setLimitBuyMarketCapUsd((current) => current || nextMarketCap * 0.9);
+          setLimitSellMarketCapUsd((current) => current || nextMarketCap * 1.25);
+        }
+      } catch (error) {
+        setQuoteError(error instanceof Error ? error.message : "Không lấy được giá token.");
+      } finally {
+        setLoadingQuote(false);
+      }
+    },
+    [contractAddress, solUsd],
+  );
+
+  useEffect(() => {
+    refreshSol();
+    const id = window.setInterval(refreshSol, 30000);
+    return () => window.clearInterval(id);
+  }, [refreshSol]);
+
+  useEffect(() => {
+    if (!quote) return;
+    const id = window.setInterval(() => refreshQuote(quote.address), 8000);
+    return () => window.clearInterval(id);
+  }, [quote, refreshQuote]);
+
+  useEffect(() => {
+    if (initialLoadRef.current || !contractAddress.trim()) return;
+    initialLoadRef.current = true;
+    refreshQuote(contractAddress);
+  }, [contractAddress, refreshQuote]);
+
+  useEffect(() => {
+    if (!quote || fillLockRef.current) return;
+    const fillable = orders.filter((order) => shouldFill(order, quote));
+    if (fillable.length === 0) return;
+
+    fillLockRef.current = true;
+    let nextPositions = positions;
+    let nextCashSol = account.cashSol;
+    const nextTrades: TradeEvent[] = [];
+    const filledIds = new Set<string>();
+
+    for (const order of fillable) {
+      try {
+        const fillPrice = executionPriceFor(order.side, quote.priceSol, order.limitPriceSol, fees);
+        if (order.side === "buy" && order.capitalSol) {
+          const buyFees = { ...fees, bribeSol: order.reservedFeesSol ?? totalFees(fees), txFeeSol: 0 };
+          const result = applyBuy(nextPositions, quote, order.capitalSol, fillPrice, buyFees, "limit");
+          nextPositions = result.positions;
+          nextTrades.push(result.trade);
+          filledIds.add(order.id);
+        }
+
+        if (order.side === "sell" && order.sellPercent) {
+          const result = applySell(nextPositions, quote, order.sellPercent, fillPrice, fees, "limit");
+          nextPositions = result.positions;
+          nextTrades.push(result.trade);
+          nextCashSol += result.trade.grossSol - result.trade.feesSol;
+          filledIds.add(order.id);
+        }
+      } catch {
+        // A stale sell limit can become impossible if the position was closed by another order.
+      }
+    }
+
+    if (filledIds.size) {
+      setPositions(nextPositions);
+      setAccount((current) => ({ ...current, cashSol: nextCashSol }));
+      setTrades((current) => [...nextTrades, ...current].slice(0, 80));
+      setOrders((current) =>
+        current.map((order) =>
+          filledIds.has(order.id)
+            ? { ...order, status: "filled", filledAt: Date.now(), fillPriceSol: quote.priceSol }
+            : order,
+        ),
+      );
+      setNotice(`${filledIds.size} limit order vừa được fill.`);
+    }
+    window.setTimeout(() => {
+      fillLockRef.current = false;
+    }, 0);
+  }, [account.cashSol, fees, orders, positions, quote]);
+
+  useEffect(() => {
+    if (!quote || sellSizingMode !== "percent") return;
+    const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, quote);
+    setLimitSellValue((selectedTotals.tokenAmount * limitSellPrice * limitSellPercent) / 100);
+  }, [limitSellMarketCapUsd, limitSellPercent, quote, selectedTotals.tokenAmount, sellSizingMode]);
+
+  const loadToken = (event: FormEvent) => {
+    event.preventDefault();
+    refreshQuote();
+  };
+
+  const marketBuy = () => {
+    if (!quote) return;
+    const requiredSol = buyCapital + currentOrderFeesSol;
+    if (account.cashSol < requiredSol) {
+      setNotice(`Không đủ cash: cần ${fmtSol(requiredSol)}, còn ${fmtSol(account.cashSol)}.`);
+      return;
+    }
+    const fillPrice = executionPriceFor("buy", quote.priceSol, null, fees);
+    const result = applyBuy(positions, quote, buyCapital, fillPrice, fees, "market");
+    setPositions(result.positions);
+    setAccount((current) => ({ ...current, cashSol: current.cashSol - requiredSol }));
+    setTrades((current) => [result.trade, ...current].slice(0, 80));
+    setNotice(`Market buy ${quote.symbol} filled at ${fmtSol(fillPrice)}.`);
+  };
+
+  const marketSell = () => {
+    if (!quote) return;
+    const fillPrice = executionPriceFor("sell", quote.priceSol, null, fees);
+    const result = applySell(positions, quote, sellPercent, fillPrice, fees, "market");
+    setPositions(result.positions);
+    setAccount((current) => ({ ...current, cashSol: current.cashSol + result.trade.grossSol - result.trade.feesSol }));
+    setTrades((current) => [result.trade, ...current].slice(0, 80));
+    setNotice(`Market sell ${fmtPct(sellPercent)} ${quote.symbol} filled.`);
+  };
+
+  const placeLimitBuy = () => {
+    const limitBuyPrice = marketCapToPriceSol(limitBuyMarketCapUsd, quote);
+    if (!quote || limitBuyMarketCapUsd <= 0 || limitBuyPrice <= 0 || limitBuyCapital <= 0) return;
+    const reservedSolForOrder = limitBuyCapital + currentOrderFeesSol;
+    if (account.cashSol < reservedSolForOrder) {
+      setNotice(`Không đủ cash để giữ limit buy: cần ${fmtSol(reservedSolForOrder)}, còn ${fmtSol(account.cashSol)}.`);
+      return;
+    }
+    const order: LimitOrder = {
+      id: uid(),
+      tokenAddress: quote.address,
+      tokenSymbol: quote.symbol,
+      side: "buy",
+      limitPriceSol: limitBuyPrice,
+      limitMarketCapUsd: limitBuyMarketCapUsd,
+      capitalSol: limitBuyCapital,
+      reservedSol: reservedSolForOrder,
+      reservedFeesSol: currentOrderFeesSol,
+      status: "open",
+      createdAt: Date.now(),
+    };
+    setOrders((current) => [order, ...current]);
+    setAccount((current) => ({ ...current, cashSol: current.cashSol - reservedSolForOrder }));
+    setNotice(`Limit buy ${quote.symbol} set at MC ${fmtCompactUsd(limitBuyMarketCapUsd)}.`);
+  };
+
+  const placeLimitSell = () => {
+    const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, quote);
+    if (!quote || limitSellMarketCapUsd <= 0 || limitSellPrice <= 0 || selectedTotals.tokenAmount <= 0) return;
+    const positionValueAtLimit = selectedTotals.tokenAmount * limitSellPrice;
+    const percent = sellSizingMode === "value" && positionValueAtLimit > 0 ? (limitSellValue / positionValueAtLimit) * 100 : limitSellPercent;
+    const safePercent = Math.min(100, Math.max(0, percent));
+    if (safePercent <= 0) return;
+    const order: LimitOrder = {
+      id: uid(),
+      tokenAddress: quote.address,
+      tokenSymbol: quote.symbol,
+      side: "sell",
+      limitPriceSol: limitSellPrice,
+      limitMarketCapUsd: limitSellMarketCapUsd,
+      sellPercent: safePercent,
+      status: "open",
+      createdAt: Date.now(),
+      note: `MC ${fmtCompactUsd(limitSellMarketCapUsd)} / value ${fmtSol((positionValueAtLimit * safePercent) / 100)}`,
+    };
+    setOrders((current) => [order, ...current]);
+    setLimitSellPercent(safePercent);
+    setNotice(`Limit sell ${fmtPct(safePercent)} ${quote.symbol} set at MC ${fmtCompactUsd(limitSellMarketCapUsd)}.`);
+  };
+
+  const cancelOrder = (id: string) => {
+    const order = orders.find((current) => current.id === id);
+    if (order?.status === "open" && order.side === "buy") {
+      setAccount((current) => ({ ...current, cashSol: current.cashSol + (order.reservedSol ?? order.capitalSol ?? 0) }));
+    }
+    setOrders((current) => current.map((order) => (order.id === id ? { ...order, status: "cancelled" } : order)));
+  };
+
+  const closePosition = (position: Position) => {
+    if (!quote || quote.address !== position.tokenAddress) {
+      setContractAddress(position.tokenAddress);
+      refreshQuote(position.tokenAddress);
+      setNotice("Mình đã load coin này. Bấm Close 100% lần nữa sau khi giá hiện tại hiện lên.");
+      return;
+    }
+    const fillPrice = executionPriceFor("sell", quote.priceSol, null, fees);
+    const result = applySell(positions, quote, 100, fillPrice, fees, "market");
+    setPositions(result.positions);
+    setAccount((current) => ({ ...current, cashSol: current.cashSol + result.trade.grossSol - result.trade.feesSol }));
+    setTrades((current) => [result.trade, ...current].slice(0, 80));
+    setNotice(`Đã đóng 100% vị thế ${quote.symbol}.`);
+  };
+
+  const resetCapital = () => {
+    const nextCapital = Math.max(0, capitalInput);
+    setAccount({ startingCapitalSol: nextCapital, cashSol: nextCapital });
+    setPositions([]);
+    setOrders([]);
+    setTrades([]);
+    setNotice(`Vốn giả lập đã reset về ${fmtSol(nextCapital)}.`);
+  };
+
+  const resetJournal = () => {
+    setPositions([]);
+    setOrders([]);
+    setTrades([]);
+    setAccount((current) => ({ ...current, cashSol: current.startingCapitalSol }));
+    setCapitalInput(account.startingCapitalSol);
+    setQuote(null);
+    setContractAddress("");
+    setLimitBuyMarketCapUsd(0);
+    setLimitSellMarketCapUsd(0);
+    setLimitSellValue(0);
+    setNotice("Paper journal đã reset.");
+  };
+
+  const quoteMarketCap = currentMarketCapUsd(quote);
+  const limitBuyPrice = marketCapToPriceSol(limitBuyMarketCapUsd, quote);
+  const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, quote);
+  const currentPriceLine = quote
+    ? `${fmtSol(quote.priceSol)}${quote.priceUsd ? ` / ${fmtUsd(quote.priceUsd)}` : ""}`
+    : "Paste CA để load giá";
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div>
+          <h1>Solana Meme Paper Trade</h1>
+          <p>Tập vào/ra lệnh bằng SOL, có slippage, fee và PnL theo từng vị thế.</p>
+        </div>
+        <div className="top-actions">
+          <button type="button" className={usdMode ? "toggle active" : "toggle"} onClick={() => setUsdMode((current) => !current)}>
+            {usdMode ? "Xem USD" : "Xem SOL"}
+          </button>
+          <button type="button" className="ghost danger" onClick={resetJournal}>Reset</button>
+        </div>
+      </header>
+
+      <form className="address-bar" onSubmit={loadToken}>
+        <label htmlFor="contract-address">
+          Contract address
+          <input
+            id="contract-address"
+            name="contract-address"
+            placeholder="Paste Solana CA..."
+            value={contractAddress}
+            onChange={(event) => setContractAddress(event.target.value)}
+          />
+        </label>
+        <button type="submit" disabled={loadingQuote}>{loadingQuote ? "Loading..." : "Load price"}</button>
+        <div className="price-ticker">
+          <span>{quote?.symbol ?? "TOKEN"}</span>
+          <strong>{currentPriceLine}</strong>
+          <small>{quote ? `Updated ${dateLabel(quote.updatedAt)}` : solUsd ? `SOL ${fmtUsd(solUsd)}` : "SOL/USD loading"}</small>
+        </div>
+      </form>
+
+      {quoteError ? <div className="alert error">{quoteError}</div> : null}
+      {notice ? <div className="alert success">{notice}</div> : null}
+
+      <section className="capital-panel">
+        <div className="capital-control">
+          <NumberInput label="Tổng vốn giả lập" value={capitalInput} onChange={setCapitalInput} suffix="SOL" />
+          <button type="button" className="ghost" onClick={resetCapital}>Reset capital</button>
+        </div>
+        <div className="capital-metrics">
+          <div>
+            <span>Cash available</span>
+            <strong>{fmtSol(account.cashSol)}</strong>
+          </div>
+          <div>
+            <span>Reserved orders</span>
+            <strong>{fmtSol(reservedSol)}</strong>
+          </div>
+          <div>
+            <span>Positions</span>
+            <strong>{fmtSol(totalPositionValueSol)}</strong>
+          </div>
+          <div>
+            <span>Equity / PnL</span>
+            <strong className={accountPnlSol >= 0 ? "positive" : "negative"}>{fmtSol(equitySol)} / {fmtSol(accountPnlSol)}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid">
+        <aside className="panel order-ticket">
+          <div className="panel-heading">
+            <h2>Order Ticket</h2>
+            <span>{quote?.dexId ?? "DEX"}</span>
+          </div>
+
+          <div className="fee-box">
+            <NumberInput label="Slippage giả lập" value={fees.slippagePct} onChange={(value) => setFees({ ...fees, slippagePct: value })} suffix="%" />
+            <NumberInput label="Bribe fee" value={fees.bribeSol} onChange={(value) => setFees({ ...fees, bribeSol: value })} suffix="SOL" />
+            <NumberInput label="Tx fee" value={fees.txFeeSol} onChange={(value) => setFees({ ...fees, txFeeSol: value })} suffix="SOL" />
+          </div>
+
+          <div className="ticket-section">
+            <h3>Market</h3>
+            <NumberInput label="Buy capital" value={buyCapital} onChange={setBuyCapital} suffix="SOL" />
+            <button type="button" disabled={!quote || account.cashSol < buyCapital + currentOrderFeesSol} onClick={marketBuy}>Buy Market</button>
+            <NumberInput label="Sell position" value={sellPercent} onChange={setSellPercent} suffix="%" />
+            <button type="button" className="sell" disabled={!quote || selectedTotals.tokenAmount <= 0} onClick={marketSell}>Sell Market</button>
+          </div>
+
+          <div className="ticket-section">
+            <h3>Limit Buy</h3>
+            <NumberInput label="Limit market cap" value={limitBuyMarketCapUsd} onChange={setLimitBuyMarketCapUsd} suffix="USD MC" />
+            <p className="preview">
+              Current MC: {quoteMarketCap ? fmtCompactUsd(quoteMarketCap) : "n/a"} / implied price {limitBuyPrice ? fmtSol(limitBuyPrice) : "n/a"}
+            </p>
+            <NumberInput label="Capital" value={limitBuyCapital} onChange={setLimitBuyCapital} suffix="SOL" />
+            <button type="button" disabled={!quote || !limitBuyPrice || account.cashSol < limitBuyCapital + currentOrderFeesSol} onClick={placeLimitBuy}>Place Limit Buy</button>
+          </div>
+
+          <div className="ticket-section">
+            <h3>Limit Sell</h3>
+            <NumberInput label="Limit market cap" value={limitSellMarketCapUsd} onChange={setLimitSellMarketCapUsd} suffix="USD MC" />
+            <p className="preview">
+              Current MC: {quoteMarketCap ? fmtCompactUsd(quoteMarketCap) : "n/a"} / implied price {limitSellPrice ? fmtSol(limitSellPrice) : "n/a"}
+            </p>
+            <div className="segmented">
+              <button type="button" className={sellSizingMode === "percent" ? "active" : ""} onClick={() => setSellSizingMode("percent")}>By %</button>
+              <button type="button" className={sellSizingMode === "value" ? "active" : ""} onClick={() => setSellSizingMode("value")}>By value</button>
+            </div>
+            {sellSizingMode === "percent" ? (
+              <NumberInput label="Position to sell" value={limitSellPercent} onChange={setLimitSellPercent} suffix="%" />
+            ) : (
+              <NumberInput label="Value to sell" value={limitSellValue} onChange={setLimitSellValue} suffix="SOL" />
+            )}
+            <p className="preview">
+              Est. sell value: {displayValue((selectedTotals.tokenAmount * limitSellPrice * (sellSizingMode === "value" && selectedTotals.tokenAmount * limitSellPrice > 0 ? Math.min(100, (limitSellValue / (selectedTotals.tokenAmount * limitSellPrice)) * 100) : limitSellPercent)) / 100)}
+            </p>
+            <button type="button" className="sell" disabled={!quote || !limitSellPrice || selectedTotals.tokenAmount <= 0} onClick={placeLimitSell}>Place Limit Sell</button>
+          </div>
+        </aside>
+
+        <section className="panel positions-panel">
+          <div className="panel-heading">
+            <h2>Open Positions</h2>
+            <span>{positions.length} vị thế</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Coin</th>
+                  <th>Qty</th>
+                  <th>Entry basis</th>
+                  <th>Value</th>
+                  <th>PnL</th>
+                  <th>Lots</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {positions.length === 0 ? (
+                  <tr><td colSpan={7} className="empty">Chưa có vị thế. Paste CA và thử một market/limit buy.</td></tr>
+                ) : (
+                  positions.map((position) => {
+                    const isSelected = quote?.address === position.tokenAddress;
+                    const current = isSelected ? quote?.priceSol : undefined;
+                    const totals = totalsForPosition(position, current);
+                    return (
+                      <tr key={position.tokenAddress} className={isSelected ? "selected-row" : ""}>
+                        <td>
+                          <button type="button" className="link-button" onClick={() => refreshQuote(position.tokenAddress)}>{position.tokenSymbol}</button>
+                          <small>{position.tokenAddress.slice(0, 4)}...{position.tokenAddress.slice(-4)}</small>
+                        </td>
+                        <td>{fmt(totals.tokenAmount, 4)}</td>
+                        <td>{fmtSol(totals.avgEntrySol)}</td>
+                        <td>{current ? displayValue(totals.marketValueSol) : "Load price"}</td>
+                        <td>
+                          {current ? (
+                            <span className={totals.unrealizedPnlSol >= 0 ? "pnl positive" : "pnl negative"}>
+                              {displayValue(totals.unrealizedPnlSol)} / {fmtPct(totals.pnlPct)}
+                            </span>
+                          ) : "n/a"}
+                          <small>Realized {displayValue(totals.realizedPnlSol)}</small>
+                        </td>
+                        <td>{position.lots.length}</td>
+                        <td><button type="button" className="ghost" onClick={() => closePosition(position)}>Close 100%</button></td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="panel-heading compact">
+            <h2>Open Limit Orders</h2>
+            <span>{openOrders.length} lệnh</span>
+          </div>
+          <div className="orders-list">
+            {openOrders.length === 0 ? <p className="empty">Chưa có limit order đang chờ.</p> : openOrders.map((order) => (
+              <div className="order-row" key={order.id}>
+                <strong className={order.side === "buy" ? "buy-text" : "sell-text"}>{order.side.toUpperCase()} {order.tokenSymbol}</strong>
+                <span>@ {orderLimitLabel(order, quote)}</span>
+                <span>{order.side === "buy" ? `${fmtSol(order.capitalSol ?? 0)} capital` : `${fmtPct(order.sellPercent ?? 0)} position`}</span>
+                <small>{order.note || `Implied ${fmtSol(order.limitPriceSol)} / ${dateLabel(order.createdAt)}`}</small>
+                <button type="button" className="ghost" onClick={() => cancelOrder(order.id)}>Cancel</button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <aside className="panel detail-panel">
+          <div className="panel-heading">
+            <h2>{quote ? `${quote.symbol} Detail` : "Coin Detail"}</h2>
+            <span>{quote?.liquidityUsd ? `Liq ${fmtUsd(quote.liquidityUsd)}` : "No chart"}</span>
+          </div>
+
+          <div className="stats">
+            <div>
+              <span>Current MC</span>
+              <strong>{quoteMarketCap ? fmtCompactUsd(quoteMarketCap) : "--"}</strong>
+              <small>{quote ? `${fmtSol(quote.priceSol)} / token` : "Price n/a"}</small>
+            </div>
+            <div>
+              <span>Entry basis</span>
+              <strong>{fmtSol(selectedTotals.avgEntrySol)}</strong>
+              <small>{selectedPosition?.lots.length ?? 0} buy lots</small>
+            </div>
+            <div>
+              <span>Position value</span>
+              <strong>{displayValue(selectedTotals.marketValueSol)}</strong>
+              <small>{fmt(selectedTotals.tokenAmount, 4)} tokens</small>
+            </div>
+            <div>
+              <span>Unrealized PnL</span>
+              <strong className={selectedTotals.unrealizedPnlSol >= 0 ? "positive" : "negative"}>{displayValue(selectedTotals.unrealizedPnlSol)}</strong>
+              <small>{fmtPct(selectedTotals.pnlPct)}</small>
+            </div>
+          </div>
+
+          <h3>Buy Lots</h3>
+          <div className="lots">
+            {!selectedPosition || selectedPosition.lots.length === 0 ? <p className="empty">Load coin có vị thế để xem từng lệnh buy.</p> : selectedPosition.lots.map((lot) => (
+              <div className="lot" key={lot.id}>
+                <div>
+                  <strong>{fmtSol(lot.capitalSol)}</strong>
+                  <small>{dateLabel(lot.createdAt)}</small>
+                </div>
+                <div>
+                  <span>Entry</span>
+                  <strong>{fmtSol(lot.entryPriceSol)}</strong>
+                </div>
+                <div>
+                  <span>Basis</span>
+                  <strong>{fmtSol(lot.costBasisSol / lot.tokenAmount)}</strong>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <h3>Recent Fills</h3>
+          <div className="fills">
+            {trades.length === 0 ? <p className="empty">Fills sẽ hiện ở đây.</p> : trades.slice(0, 8).map((trade) => (
+              <div className="fill" key={trade.id}>
+                <strong className={trade.side === "buy" ? "buy-text" : "sell-text"}>{trade.side.toUpperCase()} {trade.tokenSymbol}</strong>
+                <span>{fmtSol(trade.priceSol)}</span>
+                <small>{trade.type} / fee {fmtSol(trade.feesSol)}</small>
+                {trade.realizedPnlSol !== undefined ? <em className={trade.realizedPnlSol >= 0 ? "positive" : "negative"}>{displayValue(trade.realizedPnlSol)}</em> : null}
+              </div>
+            ))}
+          </div>
+
+          {selectedOrders.length ? <p className="hint">{selectedOrders.length} open order cho coin này đang được check mỗi 8 giây.</p> : null}
+          {quote?.url ? <a className="dex-link" href={quote.url} target="_blank" rel="noreferrer">Open pair on DEX Screener</a> : null}
+        </aside>
+      </section>
+    </main>
+  );
+}
+
+export default App;
