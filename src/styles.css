@@ -288,42 +288,43 @@ td small,
 }
 
 .refresh-indicator {
-  --refresh-angle: 360deg;
-  --refresh-counter-rotation: 0deg;
-  --refresh-rotation: 0deg;
   align-items: center;
   aspect-ratio: 1;
-  background:
-    conic-gradient(from -90deg, var(--accent) var(--refresh-angle), rgba(185, 161, 129, 0.16) 0),
-    var(--surface-inset);
-  border-radius: 999px;
+  background: var(--surface-inset);
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
   display: inline-grid;
   justify-items: center;
   margin-left: 12px;
   min-width: 34px;
-  position: relative;
-  transform: rotate(var(--refresh-rotation));
-  transition: background 140ms linear, transform 140ms linear;
+  padding: 3px;
   width: 34px;
 }
 
-.refresh-indicator::before {
-  background: var(--surface-soft);
-  border-radius: inherit;
-  content: "";
-  inset: 4px;
-  position: absolute;
+.refresh-ring {
+  display: block;
+  height: 100%;
+  overflow: visible;
+  width: 100%;
 }
 
-.refresh-indicator::after {
-  background: var(--text);
-  border-radius: 999px;
-  box-shadow: 0 0 0 2px var(--surface-soft);
-  content: "";
-  height: 5px;
-  position: absolute;
-  top: 2px;
-  width: 5px;
+.refresh-ring-bg,
+.refresh-ring-progress {
+  fill: none;
+  stroke-linecap: round;
+  stroke-width: 4;
+}
+
+.refresh-ring-bg {
+  stroke: rgba(185, 161, 129, 0.16);
+}
+
+.refresh-ring-progress {
+  stroke: var(--accent);
+  transform: rotate(-90deg) scale(1, -1);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: stroke-dashoffset 120ms linear;
 }
 
 .alert {

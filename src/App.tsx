@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { FormEvent } from "react";
 import { fetchSolUsd, fetchTokenQuote } from "./priceApi";
 import { applyBuy, applySell, executionPriceFor, shouldFill, totalFees, totalsForPosition, uid } from "./trading";
 import { loadAccount, loadFees, loadLastAddress, loadOrders, loadPositions, loadTrades, loadUsdMode, saveJson } from "./storage";
@@ -20,7 +20,7 @@ const fmtCompactUsd = (value: number) =>
   }).format(Number.isFinite(value) ? value : 0);
 const fmtPct = (value: number) => `${value >= 0 ? "+" : ""}${fmt(value, 2)}%`;
 const dateLabel = (value: number) => new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }).format(value);
-const QUOTE_REFRESH_MS = 8000;
+const refreshIntervalMs = 8000;
 const currentMarketCapUsd = (quote: TokenQuote | null) => quote?.marketCapUsd ?? quote?.fdvUsd ?? null;
 const marketCapToPriceSol = (marketCapUsd: number, quote: TokenQuote | null) => {
   const currentMc = currentMarketCapUsd(quote);
@@ -102,7 +102,7 @@ function App() {
   const [limitSellValue, setLimitSellValue] = useState(0);
   const [sellSizingMode, setSellSizingMode] = useState<"percent" | "value">("percent");
   const [notice, setNotice] = useState("");
-  const [refreshRemainingMs, setRefreshRemainingMs] = useState(QUOTE_REFRESH_MS);
+  const [refreshRemainingMs, setRefreshRemainingMs] = useState(refreshIntervalMs);
   const fillLockRef = useRef(false);
   const initialLoadRef = useRef(false);
 
@@ -179,19 +179,19 @@ function App() {
 
   useEffect(() => {
     if (!quote) return;
-    const id = window.setInterval(() => refreshQuote(quote.address), QUOTE_REFRESH_MS);
+    const id = window.setInterval(() => refreshQuote(quote.address), refreshIntervalMs);
     return () => window.clearInterval(id);
   }, [quote, refreshQuote]);
 
   useEffect(() => {
     if (!quote) {
-      setRefreshRemainingMs(QUOTE_REFRESH_MS);
+      setRefreshRemainingMs(refreshIntervalMs);
       return;
     }
 
     const tick = () => {
       const elapsed = Date.now() - quote.updatedAt;
-      setRefreshRemainingMs(Math.max(0, QUOTE_REFRESH_MS - elapsed));
+      setRefreshRemainingMs(Math.max(0, refreshIntervalMs - elapsed));
     };
 
     tick();
@@ -393,14 +393,13 @@ function App() {
   const limitBuyPrice = marketCapToPriceSol(limitBuyMarketCapUsd, quote);
   const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, quote);
   const currentMarketCapLine = quoteMarketCap ? `MC ${fmtCompactUsd(quoteMarketCap)}` : "Paste CA để load MC";
-  const refreshProgress = quote ? Math.max(0, Math.min(1, refreshRemainingMs / QUOTE_REFRESH_MS)) : 0;
-  const refreshElapsed = 1 - refreshProgress;
-  const refreshSeconds = Math.max(0, Math.ceil(refreshRemainingMs / 1000));
-  const refreshIndicatorStyle = {
-    "--refresh-angle": `${refreshProgress * 360}deg`,
-    "--refresh-rotation": `${-refreshElapsed * 360}deg`,
-    "--refresh-counter-rotation": `${refreshElapsed * 360}deg`,
-  } as CSSProperties;
+  const remainingMs = quote ? refreshRemainingMs : refreshIntervalMs;
+  const progressRatio = Math.max(0, Math.min(1, remainingMs / refreshIntervalMs));
+  const refreshRingRadius = 15;
+  const circumference = 2 * Math.PI * refreshRingRadius;
+  // As remaining time falls, dashOffset grows, so the active stroke depletes from full to empty.
+  const dashOffset = circumference * (1 - progressRatio);
+  const refreshSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
 
   return (
     <main className="app-shell">
@@ -440,9 +439,20 @@ function App() {
               aria-label={`Còn ${refreshSeconds} giây trước lần cập nhật tiếp theo`}
               className="refresh-indicator"
               role="timer"
-              style={refreshIndicatorStyle}
               title={`Refresh sau ${refreshSeconds}s`}
-            />
+            >
+              <svg aria-hidden="true" className="refresh-ring" focusable="false" viewBox="0 0 40 40">
+                <circle className="refresh-ring-bg" cx="20" cy="20" r={refreshRingRadius} />
+                <circle
+                  className="refresh-ring-progress"
+                  cx="20"
+                  cy="20"
+                  r={refreshRingRadius}
+                  strokeDasharray={circumference}
+                  strokeDashoffset={dashOffset}
+                />
+              </svg>
+            </span>
           ) : null}
         </div>
       </form>
