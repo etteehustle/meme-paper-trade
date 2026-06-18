@@ -106,6 +106,7 @@ function App() {
   const [refreshRemainingMs, setRefreshRemainingMs] = useState(refreshIntervalMs);
   const [syncStatus, setSyncStatus] = useState<"connecting" | "synced" | "saving" | "local" | "sent" | "error">("connecting");
   const [syncMessage, setSyncMessage] = useState("Connecting DB");
+  const [loginFeedback, setLoginFeedback] = useState("");
   const [cloudUserId, setCloudUserId] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
@@ -191,6 +192,7 @@ function App() {
         const message = error instanceof Error ? error.message : "Sign in to sync DB";
         setSyncStatus("local");
         setSyncMessage(message === "Sign in to sync DB" ? message : `DB unavailable: ${message}`);
+        setLoginFeedback("");
       }
     };
 
@@ -211,9 +213,12 @@ function App() {
       await sendCloudLoginLink(loginEmail.trim());
       setSyncStatus("sent");
       setSyncMessage("Check your email for login link");
+      setLoginFeedback("Đã gửi link đăng nhập. Kiểm tra email của bạn.");
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Login error";
       setSyncStatus("error");
-      setSyncMessage(error instanceof Error ? `Login error: ${error.message}` : "Login error");
+      setSyncMessage(`Login error: ${message}`);
+      setLoginFeedback(`Không gửi được login link: ${message}`);
     } finally {
       setAuthBusy(false);
     }
@@ -540,7 +545,7 @@ function App() {
             </button>
           </form>
 
-          <p className={`login-status ${syncStatus}`}>{syncMessage}</p>
+          {loginFeedback ? <p className={`login-status ${syncStatus}`}>{loginFeedback}</p> : null}
         </section>
       </main>
     );
