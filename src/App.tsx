@@ -104,7 +104,7 @@ function App() {
   const [sellSizingMode, setSellSizingMode] = useState<"percent" | "value">("percent");
   const [notice, setNotice] = useState("");
   const [refreshRemainingMs, setRefreshRemainingMs] = useState(refreshIntervalMs);
-  const [syncStatus, setSyncStatus] = useState<"connecting" | "synced" | "saving" | "local" | "error">("connecting");
+  const [syncStatus, setSyncStatus] = useState<"connecting" | "synced" | "saving" | "local" | "sent" | "error">("connecting");
   const [syncMessage, setSyncMessage] = useState("Connecting DB");
   const [cloudUserId, setCloudUserId] = useState("");
   const [loginEmail, setLoginEmail] = useState("");
@@ -188,8 +188,9 @@ function App() {
       } catch (error) {
         if (cancelled) return;
         cloudReadyRef.current = false;
+        const message = error instanceof Error ? error.message : "Sign in to sync DB";
         setSyncStatus("local");
-        setSyncMessage(error instanceof Error ? `Local cache: ${error.message}` : "Local cache");
+        setSyncMessage(message === "Sign in to sync DB" ? message : `DB unavailable: ${message}`);
       }
     };
 
@@ -208,8 +209,8 @@ function App() {
     setAuthBusy(true);
     try {
       await sendCloudLoginLink(loginEmail.trim());
-      setSyncStatus("local");
-      setSyncMessage("Check email to sync DB");
+      setSyncStatus("sent");
+      setSyncMessage("Check your email for login link");
     } catch (error) {
       setSyncStatus("error");
       setSyncMessage(error instanceof Error ? `Login error: ${error.message}` : "Login error");
@@ -225,7 +226,7 @@ function App() {
       cloudReadyRef.current = false;
       setCloudUserId("");
       setSyncStatus("local");
-      setSyncMessage("Signed out - local cache");
+      setSyncMessage("Signed out");
     } catch (error) {
       setSyncStatus("error");
       setSyncMessage(error instanceof Error ? `Logout error: ${error.message}` : "Logout error");
@@ -311,10 +312,10 @@ function App() {
   }, [quote]);
 
   useEffect(() => {
-    if (initialLoadRef.current || !contractAddress.trim()) return;
+    if (!cloudUserId || initialLoadRef.current || !contractAddress.trim()) return;
     initialLoadRef.current = true;
     refreshQuote(contractAddress);
-  }, [contractAddress, refreshQuote]);
+  }, [cloudUserId, contractAddress, refreshQuote]);
 
   useEffect(() => {
     if (!quote || fillLockRef.current) return;
@@ -512,6 +513,39 @@ function App() {
   const dashOffset = circumference * (1 - progressRatio);
   const refreshSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
 
+  if (!cloudUserId) {
+    return (
+      <main className="login-shell">
+        <section className="login-card">
+          <div>
+            <p className="eyebrow">Paper trade journal</p>
+            <h1>Solana Meme Paper Trade</h1>
+            <p className="login-copy">Đăng nhập bằng email để đồng bộ vốn, vị thế, lệnh chờ và lịch sử fill trên database Supabase.</p>
+          </div>
+
+          <form className="login-form" onSubmit={requestLoginLink}>
+            <label htmlFor="login-email">
+              Email
+              <input
+                id="login-email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                type="email"
+                value={loginEmail}
+                onChange={(event) => setLoginEmail(event.target.value)}
+              />
+            </label>
+            <button type="submit" disabled={authBusy || !loginEmail.trim()}>
+              {authBusy ? "Sending..." : "Send login link"}
+            </button>
+          </form>
+
+          <p className={`login-status ${syncStatus}`}>{syncMessage}</p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -520,29 +554,11 @@ function App() {
           <p>Tập vào/ra lệnh bằng SOL, có slippage, fee và PnL theo từng vị thế.</p>
         </div>
         <div className="top-actions">
-          <span className={`sync-pill ${syncStatus}`} title={cloudUserId ? `Supabase user ${cloudUserId}` : syncMessage}>
-            {syncMessage}
-          </span>
-          {cloudUserId ? (
-            <button type="button" className="ghost" disabled={authBusy} onClick={signOutFromCloud}>Sign out DB</button>
-          ) : (
-            <form className="sync-login" onSubmit={requestLoginLink}>
-              <input
-                aria-label="Email sync"
-                placeholder="Email sync"
-                type="email"
-                value={loginEmail}
-                onChange={(event) => setLoginEmail(event.target.value)}
-              />
-              <button type="submit" className="ghost" disabled={authBusy || !loginEmail.trim()}>
-                {authBusy ? "Sending..." : "Login DB"}
-              </button>
-            </form>
-          )}
           <button type="button" className={usdMode ? "toggle active" : "toggle"} onClick={() => setUsdMode((current) => !current)}>
             {usdMode ? "Xem USD" : "Xem SOL"}
           </button>
           <button type="button" className="ghost danger" onClick={resetJournal}>Reset</button>
+          <button type="button" className="ghost logout-button" disabled={authBusy} onClick={signOutFromCloud}>Logout</button>
         </div>
       </header>
 
