@@ -257,12 +257,18 @@ input:focus {
 }
 
 .price-ticker {
+  align-items: center;
   background: var(--surface-soft);
   border: 1px solid var(--line);
   border-radius: 8px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 3px;
   padding: 11px 12px;
+}
+
+.ticker-copy {
+  min-width: 0;
 }
 
 .price-ticker span,
@@ -279,6 +285,56 @@ td small,
 .price-ticker strong {
   font-size: 15px;
   font-variant-numeric: tabular-nums;
+}
+
+.refresh-indicator {
+  --refresh-angle: 360deg;
+  --refresh-counter-rotation: 0deg;
+  --refresh-rotation: 0deg;
+  align-items: center;
+  aspect-ratio: 1;
+  background:
+    conic-gradient(from -90deg, var(--accent) var(--refresh-angle), rgba(185, 161, 129, 0.16) 0),
+    var(--surface-inset);
+  border-radius: 999px;
+  display: inline-grid;
+  justify-items: center;
+  margin-left: 12px;
+  min-width: 34px;
+  position: relative;
+  transform: rotate(var(--refresh-rotation));
+  transition: background 140ms linear, transform 140ms linear;
+  width: 34px;
+}
+
+.refresh-indicator::before {
+  background: var(--surface-soft);
+  border-radius: inherit;
+  content: "";
+  inset: 4px;
+  position: absolute;
+}
+
+.refresh-indicator::after {
+  background: var(--text);
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--surface-soft);
+  content: "";
+  height: 5px;
+  position: absolute;
+  top: 2px;
+  width: 5px;
+}
+
+.refresh-indicator span {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 760;
+  line-height: 1;
+  position: relative;
+  transform: rotate(var(--refresh-counter-rotation));
+  transition: transform 140ms linear;
+  z-index: 1;
 }
 
 .alert {
