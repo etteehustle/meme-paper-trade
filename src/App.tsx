@@ -109,7 +109,6 @@ function App() {
   );
   const selectedTotals = useMemo(() => totalsForPosition(selectedPosition, quote?.priceSol), [selectedPosition, quote?.priceSol]);
   const openOrders = useMemo(() => orders.filter((order) => order.status === "open"), [orders]);
-  const selectedOrders = useMemo(() => (quote ? openOrders.filter((order) => order.tokenAddress === quote.address) : []), [openOrders, quote]);
   const reservedSol = useMemo(
     () => openOrders.reduce((sum, order) => sum + (order.side === "buy" ? order.reservedSol ?? order.capitalSol ?? 0 : 0), 0),
     [openOrders],
@@ -629,7 +628,6 @@ function App() {
             ))}
           </div>
 
-          {selectedOrders.length ? <p className="hint">{selectedOrders.length} open order cho coin này đang được check mỗi 8 giây.</p> : null}
           {quote?.url ? <a className="dex-link" href={quote.url} target="_blank" rel="noreferrer">Open pair on DEX Screener</a> : null}
         </aside>
       </section>
