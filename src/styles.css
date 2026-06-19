@@ -216,7 +216,7 @@ input::placeholder {
   padding:
     max(18px, env(safe-area-inset-top))
     max(18px, env(safe-area-inset-right))
-    max(18px, env(safe-area-inset-bottom))
+    max(92px, env(safe-area-inset-bottom))
     max(18px, env(safe-area-inset-left));
   width: 100%;
 }
@@ -386,6 +386,150 @@ input::placeholder {
   font-size: 12px;
   min-height: 34px;
   padding: 7px 10px;
+}
+
+.settings-bubble {
+  bottom: max(14px, env(safe-area-inset-bottom));
+  display: grid;
+  gap: 10px;
+  left: max(14px, env(safe-area-inset-left));
+  position: fixed;
+  width: min(260px, calc(100vw - 28px));
+  z-index: 20;
+}
+
+.settings-trigger {
+  align-items: center;
+  aspect-ratio: 1;
+  background:
+    linear-gradient(145deg, rgba(31, 30, 22, 0.94), rgba(9, 10, 7, 0.9)),
+    radial-gradient(circle at 36% 24%, rgba(211, 179, 110, 0.28), transparent 58%);
+  border: 1px solid rgba(211, 179, 110, 0.38);
+  border-radius: 999px;
+  box-shadow:
+    0 16px 44px rgba(0, 0, 0, 0.38),
+    inset 0 1px 0 rgba(255, 238, 180, 0.16);
+  color: var(--accent);
+  display: inline-flex;
+  justify-content: center;
+  justify-self: start;
+  min-height: 48px;
+  padding: 0;
+  width: 48px;
+}
+
+.settings-trigger:hover:not(:disabled) {
+  background:
+    linear-gradient(145deg, rgba(38, 36, 25, 0.98), rgba(11, 12, 8, 0.94)),
+    radial-gradient(circle at 36% 24%, rgba(211, 179, 110, 0.36), transparent 58%);
+  border-color: rgba(211, 179, 110, 0.58);
+}
+
+.settings-trigger svg {
+  fill: currentColor;
+  height: 21px;
+  transform: rotate(0deg);
+  transition: transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  width: 21px;
+}
+
+.settings-bubble.open .settings-trigger svg {
+  transform: rotate(34deg);
+}
+
+.settings-menu {
+  background:
+    linear-gradient(145deg, rgba(20, 21, 15, 0.94), rgba(8, 9, 6, 0.9)),
+    radial-gradient(circle at 0 0, rgba(211, 179, 110, 0.12), transparent 12rem);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow:
+    0 20px 70px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 238, 180, 0.08);
+  display: grid;
+  gap: 8px;
+  opacity: 0;
+  padding: 10px;
+  pointer-events: none;
+  transform: translateY(10px) scale(0.97);
+  transform-origin: bottom left;
+  transition:
+    opacity 180ms ease,
+    transform 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s linear 180ms;
+  visibility: hidden;
+}
+
+.settings-bubble.open .settings-menu {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  transition:
+    opacity 180ms ease,
+    transform 240ms cubic-bezier(0.16, 1, 0.3, 1),
+    visibility 0s;
+  visibility: visible;
+}
+
+.settings-menu-heading {
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 2px;
+  margin-bottom: 2px;
+  padding: 2px 2px 10px;
+}
+
+.settings-menu-heading span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.settings-menu-heading small {
+  color: var(--quiet);
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.currency-switch {
+  background: rgba(4, 5, 3, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 3px;
+  grid-template-columns: 1fr 1fr;
+  padding: 3px;
+}
+
+.currency-switch button {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  min-height: 36px;
+  padding: 8px 10px;
+}
+
+.currency-switch button:hover:not(:disabled) {
+  background: rgba(211, 179, 110, 0.07);
+  box-shadow: none;
+}
+
+.currency-switch button.active {
+  background: var(--accent-soft);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+}
+
+.settings-menu button {
+  justify-content: center;
+  min-height: 40px;
+  width: 100%;
+}
+
+.settings-menu .logout-button {
+  min-height: 40px;
 }
 
 .address-bar,
@@ -862,7 +1006,7 @@ tbody tr:hover {
     padding:
       max(10px, env(safe-area-inset-top))
       max(10px, env(safe-area-inset-right))
-      max(10px, env(safe-area-inset-bottom))
+      max(90px, env(safe-area-inset-bottom))
       max(10px, env(safe-area-inset-left));
   }
 

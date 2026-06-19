@@ -22,6 +22,7 @@ const fmtCompactUsd = (value: number) =>
 const fmtPct = (value: number) => `${value >= 0 ? "+" : ""}${fmt(value, 2)}%`;
 const dateLabel = (value: number) => new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "2-digit" }).format(value);
 const refreshIntervalMs = 8000;
+const notificationTimeoutMs = 5000;
 const currentMarketCapUsd = (quote: TokenQuote | null) => quote?.marketCapUsd ?? quote?.fdvUsd ?? null;
 const marketCapToPriceSol = (marketCapUsd: number, quote: TokenQuote | null) => {
   const currentMc = currentMarketCapUsd(quote);
@@ -44,23 +45,47 @@ const orderLimitLabel = (order: LimitOrder, quote: TokenQuote | null) => {
 const orderEntryNote = (order: LimitOrder, quote: TokenQuote | null) => {
   return `Entry ${orderLimitLabel(order, quote)} / ${dateLabel(order.createdAt)}`;
 };
+const decimalInputPattern = /^\d*\.?\d*$/;
+const valueToInputText = (value: number) => (Number.isFinite(value) ? String(value) : "");
 
 function NumberInput({
   label,
   value,
   onChange,
-  min = 0,
-  step = "any",
   suffix,
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
-  min?: number;
-  step?: string;
   suffix?: string;
 }) {
   const id = useId();
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(() => valueToInputText(value));
+
+  useEffect(() => {
+    if (!isEditing) setDraft(valueToInputText(value));
+  }, [isEditing, value]);
+
+  const handleChange = (nextText: string) => {
+    if (!decimalInputPattern.test(nextText)) return;
+
+    setDraft(nextText);
+    if (nextText.trim() === "") {
+      onChange(0);
+      return;
+    }
+
+    const nextValue = Number(nextText);
+    if (Number.isFinite(nextValue)) onChange(nextValue);
+  };
+
+  const finishEditing = () => {
+    setIsEditing(false);
+    if (draft.trim() === "" || !Number.isFinite(Number(draft))) {
+      setDraft(valueToInputText(value));
+    }
+  };
 
   return (
     <label className="field" htmlFor={id}>
@@ -69,11 +94,16 @@ function NumberInput({
         <input
           id={id}
           name={id}
-          type="number"
-          min={min}
-          step={step}
-          value={Number.isFinite(value) ? value : 0}
-          onChange={(event) => onChange(Number(event.target.value))}
+          type="text"
+          inputMode="decimal"
+          pattern="\d*\.?\d*"
+          value={isEditing ? draft : valueToInputText(value)}
+          onBlur={finishEditing}
+          onChange={(event) => handleChange(event.target.value)}
+          onFocus={() => {
+            setIsEditing(true);
+            if (value === 0) setDraft("");
+          }}
         />
         {suffix ? <strong>{suffix}</strong> : null}
       </div>
@@ -112,6 +142,7 @@ function App() {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [authBusy, setAuthBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const fillLockRef = useRef(false);
   const initialLoadRef = useRef(false);
   const cloudReadyRef = useRef(false);
@@ -166,6 +197,29 @@ function App() {
     }),
     [account, contractAddress, fees, orders, positions, trades, usdMode],
   );
+
+  useEffect(() => {
+    if (!notice) return;
+    const id = window.setTimeout(() => setNotice(""), notificationTimeoutMs);
+    return () => window.clearTimeout(id);
+  }, [notice]);
+
+  useEffect(() => {
+    if (!quoteError) return;
+    const id = window.setTimeout(() => setQuoteError(""), notificationTimeoutMs);
+    return () => window.clearTimeout(id);
+  }, [quoteError]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSettingsOpen(false);
+    };
+
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [settingsOpen]);
 
   useEffect(() => saveJson("mpt.positions", positions), [positions]);
   useEffect(() => saveJson("mpt.orders", orders), [orders]);
@@ -659,14 +713,38 @@ function App() {
           <h1>Solana Meme Paper Trade</h1>
           <p>Tập vào/ra lệnh bằng SOL, có slippage, fee và PnL theo từng vị thế.</p>
         </div>
-        <div className="top-actions">
-          <button type="button" className={usdMode ? "toggle active" : "toggle"} onClick={() => setUsdMode((current) => !current)}>
-            {usdMode ? "Xem USD" : "Xem SOL"}
-          </button>
+      </header>
+
+      <div className={settingsOpen ? "settings-bubble open" : "settings-bubble"}>
+        <div className="settings-menu" id="settings-menu" aria-hidden={!settingsOpen}>
+          <div className="settings-menu-heading">
+            <span>Settings</span>
+            <small>Account & display</small>
+          </div>
+          <div className="currency-switch" aria-label="Display currency">
+            <button type="button" className={usdMode ? "active" : ""} aria-pressed={usdMode} onClick={() => setUsdMode(true)}>
+              USD
+            </button>
+            <button type="button" className={!usdMode ? "active" : ""} aria-pressed={!usdMode} onClick={() => setUsdMode(false)}>
+              SOL
+            </button>
+          </div>
           <button type="button" className="ghost danger" onClick={resetJournal}>Reset</button>
           <button type="button" className="ghost logout-button" disabled={authBusy} onClick={signOutFromCloud}>Logout</button>
         </div>
-      </header>
+        <button
+          type="button"
+          className="settings-trigger"
+          aria-controls="settings-menu"
+          aria-expanded={settingsOpen}
+          aria-label={settingsOpen ? "Đóng settings" : "Mở settings"}
+          onClick={() => setSettingsOpen((current) => !current)}
+        >
+          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+            <path d="M12 8.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Zm8.2 4.9v-2.2l-2.1-.4a6.5 6.5 0 0 0-.8-1.8l1.2-1.8-1.6-1.6-1.8 1.2a6.5 6.5 0 0 0-1.8-.8L12.9 3h-2.2l-.4 2.1a6.5 6.5 0 0 0-1.8.8L6.7 4.7 5.1 6.3l1.2 1.8a6.5 6.5 0 0 0-.8 1.8l-2.1.4v2.2l2.1.4c.2.7.5 1.3.8 1.8l-1.2 1.8 1.6 1.6 1.8-1.2c.6.4 1.2.6 1.8.8l.4 2.1h2.2l.4-2.1c.7-.2 1.3-.5 1.8-.8l1.8 1.2 1.6-1.6-1.2-1.8c.4-.6.6-1.2.8-1.8l2.1-.4Z" />
+          </svg>
+        </button>
+      </div>
 
       <form className="address-bar" onSubmit={loadToken}>
         <label htmlFor="contract-address">
@@ -720,19 +798,19 @@ function App() {
         <div className="capital-metrics">
           <div>
             <span>Cash available</span>
-            <strong>{fmtSol(account.cashSol)}</strong>
+            <strong>{displayValue(account.cashSol)}</strong>
           </div>
           <div>
             <span>Reserved orders</span>
-            <strong>{fmtSol(reservedSol)}</strong>
+            <strong>{displayValue(reservedSol)}</strong>
           </div>
           <div>
             <span>Positions</span>
-            <strong>{fmtSol(totalPositionValueSol)}</strong>
+            <strong>{displayValue(totalPositionValueSol)}</strong>
           </div>
           <div>
             <span>Equity / PnL</span>
-            <strong className={accountPnlSol >= 0 ? "positive" : "negative"}>{fmtSol(equitySol)} / {fmtSol(accountPnlSol)}</strong>
+            <strong className={accountPnlSol >= 0 ? "positive" : "negative"}>{displayValue(equitySol)} / {displayValue(accountPnlSol)}</strong>
           </div>
         </div>
       </section>
