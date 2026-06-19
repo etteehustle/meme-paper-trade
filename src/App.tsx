@@ -114,6 +114,7 @@ function NumberInput({
 function App() {
   const [contractAddress, setContractAddress] = useState(() => loadLastAddress());
   const [quote, setQuote] = useState<TokenQuote | null>(null);
+  const [activeTokenAddress, setActiveTokenAddress] = useState("");
   const [quotesByAddress, setQuotesByAddress] = useState<Record<string, TokenQuote>>({});
   const [solUsd, setSolUsd] = useState<number | null>(null);
   const [loadingQuote, setLoadingQuote] = useState(false);
@@ -148,21 +149,31 @@ function App() {
   const cloudReadyRef = useRef(false);
   const saveTimerRef = useRef<number | null>(null);
 
+  const activeQuote = useMemo(() => {
+    if (!activeTokenAddress) return quote;
+    return quotesByAddress[activeTokenAddress] ?? (quote?.address === activeTokenAddress ? quote : null);
+  }, [activeTokenAddress, quote, quotesByAddress]);
+  const activeAddress = activeTokenAddress || activeQuote?.address || quote?.address || "";
   const selectedPosition = useMemo(
-    () => (quote ? positions.find((position) => position.tokenAddress === quote.address) : undefined),
-    [positions, quote],
+    () => (activeAddress ? positions.find((position) => position.tokenAddress === activeAddress) : undefined),
+    [activeAddress, positions],
   );
-  const selectedTotals = useMemo(() => totalsForPosition(selectedPosition, quote?.priceSol), [selectedPosition, quote?.priceSol]);
+  const selectedTotals = useMemo(() => totalsForPosition(selectedPosition, activeQuote?.priceSol), [activeQuote?.priceSol, selectedPosition]);
+  const activeTrades = useMemo(
+    () => (activeAddress ? trades.filter((trade) => trade.tokenAddress === activeAddress) : trades),
+    [activeAddress, trades],
+  );
   const openOrders = useMemo(() => orders.filter((order) => order.status === "open"), [orders]);
   const trackedTokenAddresses = useMemo(() => {
     return Array.from(
       new Set([
         ...positions.map((position) => position.tokenAddress),
         ...openOrders.map((order) => order.tokenAddress),
+        ...(activeTokenAddress ? [activeTokenAddress] : []),
         ...(quote?.address ? [quote.address] : []),
       ]),
     ).filter(Boolean);
-  }, [openOrders, positions, quote?.address]);
+  }, [activeTokenAddress, openOrders, positions, quote?.address]);
   const reservedSol = useMemo(
     () => openOrders.reduce((sum, order) => sum + (order.side === "buy" ? order.reservedSol ?? order.capitalSol ?? 0 : 0), 0),
     [openOrders],
@@ -249,6 +260,7 @@ function App() {
         setCapitalInput(result.state.account.startingCapitalSol);
         setUsdMode(result.state.usdMode);
         setContractAddress(result.state.lastAddress);
+        setActiveTokenAddress(result.state.lastAddress);
         setSyncStatus("synced");
         setSyncMessage(result.migrated ? "DB synced from local" : "DB synced");
       } catch (error) {
@@ -281,6 +293,7 @@ function App() {
     setCapitalInput(result.state.account.startingCapitalSol);
     setUsdMode(result.state.usdMode);
     setContractAddress(result.state.lastAddress);
+    setActiveTokenAddress(result.state.lastAddress);
     setSyncStatus("synced");
     setSyncMessage(result.migrated ? "DB synced from local" : "DB synced");
   };
@@ -385,6 +398,7 @@ function App() {
         setQuote(next);
         setQuotesByAddress((current) => ({ ...current, [next.address]: next }));
         setContractAddress(next.address);
+        setActiveTokenAddress(next.address);
         if (nextMarketCap) {
           setLimitBuyMarketCapUsd(nextMarketCap);
           setLimitSellMarketCapUsd(nextMarketCap);
@@ -428,20 +442,20 @@ function App() {
   }, [cloudUserId, solUsd, storeQuote, trackedTokenAddresses]);
 
   useEffect(() => {
-    if (!quote) {
+    if (!activeQuote) {
       setRefreshRemainingMs(refreshIntervalMs);
       return;
     }
 
     const tick = () => {
-      const elapsed = Date.now() - quote.updatedAt;
+      const elapsed = Date.now() - activeQuote.updatedAt;
       setRefreshRemainingMs(Math.max(0, refreshIntervalMs - elapsed));
     };
 
     tick();
     const id = window.setInterval(tick, 120);
     return () => window.clearInterval(id);
-  }, [quote]);
+  }, [activeQuote]);
 
   useEffect(() => {
     if (!cloudUserId || initialLoadRef.current || !contractAddress.trim()) return;
@@ -510,44 +524,76 @@ function App() {
   }, [account.cashSol, fees, openOrders, positions, quotesByAddress]);
 
   useEffect(() => {
-    if (!quote || sellSizingMode !== "percent") return;
-    const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, quote);
+    if (!activeQuote || sellSizingMode !== "percent") return;
+    const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, activeQuote);
     setLimitSellValue((selectedTotals.tokenAmount * limitSellPrice * limitSellPercent) / 100);
-  }, [limitSellMarketCapUsd, limitSellPercent, quote, selectedTotals.tokenAmount, sellSizingMode]);
+  }, [activeQuote, limitSellMarketCapUsd, limitSellPercent, selectedTotals.tokenAmount, sellSizingMode]);
 
   const loadToken = (event: FormEvent) => {
     event.preventDefault();
     refreshQuote();
   };
 
+  const selectPosition = useCallback(
+    (position: Position) => {
+      const cachedQuote = quotesByAddress[position.tokenAddress] ?? (quote?.address === position.tokenAddress ? quote : null);
+      setActiveTokenAddress(position.tokenAddress);
+      setContractAddress(position.tokenAddress);
+      if (cachedQuote) {
+        const cachedMarketCap = currentMarketCapUsd(cachedQuote);
+        setQuote(cachedQuote);
+        if (cachedMarketCap) {
+          setLimitBuyMarketCapUsd(cachedMarketCap);
+          setLimitSellMarketCapUsd(cachedMarketCap);
+        }
+      }
+      refreshQuote(position.tokenAddress);
+    },
+    [quote, quotesByAddress, refreshQuote],
+  );
+
   const marketBuy = () => {
-    if (!quote) return;
+    const tradingQuote = activeQuote;
+    if (!tradingQuote) return;
     const requiredSol = buyCapital + currentOrderFeesSol;
     if (account.cashSol < requiredSol) {
       setNotice(`Không đủ cash: cần ${fmtSol(requiredSol)}, còn ${fmtSol(account.cashSol)}.`);
       return;
     }
-    const fillPrice = executionPriceFor("buy", quote.priceSol, null, fees);
-    const result = applyBuy(positions, quote, buyCapital, fillPrice, fees, "market");
+    const fillPrice = executionPriceFor("buy", tradingQuote.priceSol, null, fees);
+    const result = applyBuy(positions, tradingQuote, buyCapital, fillPrice, fees, "market");
     setPositions(result.positions);
     setAccount((current) => ({ ...current, cashSol: current.cashSol - requiredSol }));
     setTrades((current) => [result.trade, ...current].slice(0, 80));
-    setNotice(`Market buy ${quote.symbol} filled at ${fmtSol(fillPrice)}.`);
+    setNotice(`Market buy ${tradingQuote.symbol} filled at ${fmtSol(fillPrice)}.`);
   };
 
   const marketSell = () => {
-    if (!quote) return;
-    const fillPrice = executionPriceFor("sell", quote.priceSol, null, fees);
-    const result = applySell(positions, quote, sellPercent, fillPrice, fees, "market");
+    const tradingQuote = activeQuote;
+    if (!tradingQuote) return;
+    const fillPrice = executionPriceFor("sell", tradingQuote.priceSol, null, fees);
+    const result = applySell(positions, tradingQuote, sellPercent, fillPrice, fees, "market");
     setPositions(result.positions);
     setAccount((current) => ({ ...current, cashSol: current.cashSol + result.trade.grossSol - result.trade.feesSol }));
     setTrades((current) => [result.trade, ...current].slice(0, 80));
-    setNotice(`Market sell ${fmtPct(sellPercent)} ${quote.symbol} filled.`);
+    setNotice(`Market sell ${fmtPct(sellPercent)} ${tradingQuote.symbol} filled.`);
   };
 
   const placeLimitBuy = () => {
-    const limitBuyPrice = marketCapToPriceSol(limitBuyMarketCapUsd, quote);
-    if (!quote || limitBuyMarketCapUsd <= 0 || limitBuyPrice <= 0 || limitBuyCapital <= 0) return;
+    const tradingQuote = activeQuote;
+    const limitBuyPrice = marketCapToPriceSol(limitBuyMarketCapUsd, tradingQuote);
+    if (!tradingQuote) {
+      setNotice("Load coin trước khi đặt limit buy.");
+      return;
+    }
+    if (limitBuyMarketCapUsd <= 0 || limitBuyPrice <= 0) {
+      setNotice("Nhập market cap hợp lệ để đặt limit buy.");
+      return;
+    }
+    if (limitBuyCapital <= 0) {
+      setNotice("Nhập capital lớn hơn 0 để đặt limit buy.");
+      return;
+    }
     const reservedSolForOrder = limitBuyCapital + currentOrderFeesSol;
     if (account.cashSol < reservedSolForOrder) {
       setNotice(`Không đủ cash để giữ limit buy: cần ${fmtSol(reservedSolForOrder)}, còn ${fmtSol(account.cashSol)}.`);
@@ -555,8 +601,8 @@ function App() {
     }
     const order: LimitOrder = {
       id: uid(),
-      tokenAddress: quote.address,
-      tokenSymbol: quote.symbol,
+      tokenAddress: tradingQuote.address,
+      tokenSymbol: tradingQuote.symbol,
       side: "buy",
       limitPriceSol: limitBuyPrice,
       limitMarketCapUsd: limitBuyMarketCapUsd,
@@ -568,20 +614,21 @@ function App() {
     };
     setOrders((current) => [order, ...current]);
     setAccount((current) => ({ ...current, cashSol: current.cashSol - reservedSolForOrder }));
-    setNotice(`Limit buy ${quote.symbol} set at MC ${fmtCompactUsd(limitBuyMarketCapUsd)}.`);
+    setNotice(`Limit buy ${tradingQuote.symbol} set at MC ${fmtCompactUsd(limitBuyMarketCapUsd)}.`);
   };
 
   const placeLimitSell = () => {
-    const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, quote);
-    if (!quote || limitSellMarketCapUsd <= 0 || limitSellPrice <= 0 || selectedTotals.tokenAmount <= 0) return;
+    const tradingQuote = activeQuote;
+    const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, tradingQuote);
+    if (!tradingQuote || limitSellMarketCapUsd <= 0 || limitSellPrice <= 0 || selectedTotals.tokenAmount <= 0) return;
     const positionValueAtLimit = selectedTotals.tokenAmount * limitSellPrice;
     const percent = sellSizingMode === "value" && positionValueAtLimit > 0 ? (limitSellValue / positionValueAtLimit) * 100 : limitSellPercent;
     const safePercent = Math.min(100, Math.max(0, percent));
     if (safePercent <= 0) return;
     const order: LimitOrder = {
       id: uid(),
-      tokenAddress: quote.address,
-      tokenSymbol: quote.symbol,
+      tokenAddress: tradingQuote.address,
+      tokenSymbol: tradingQuote.symbol,
       side: "sell",
       limitPriceSol: limitSellPrice,
       limitMarketCapUsd: limitSellMarketCapUsd,
@@ -592,7 +639,7 @@ function App() {
     };
     setOrders((current) => [order, ...current]);
     setLimitSellPercent(safePercent);
-    setNotice(`Limit sell ${fmtPct(safePercent)} ${quote.symbol} set at MC ${fmtCompactUsd(limitSellMarketCapUsd)}.`);
+    setNotice(`Limit sell ${fmtPct(safePercent)} ${tradingQuote.symbol} set at MC ${fmtCompactUsd(limitSellMarketCapUsd)}.`);
   };
 
   const cancelOrder = (id: string) => {
@@ -604,18 +651,20 @@ function App() {
   };
 
   const closePosition = (position: Position) => {
-    if (!quote || quote.address !== position.tokenAddress) {
+    const positionQuote = quotesByAddress[position.tokenAddress] ?? (activeQuote?.address === position.tokenAddress ? activeQuote : null);
+    if (!positionQuote) {
       setContractAddress(position.tokenAddress);
+      setActiveTokenAddress(position.tokenAddress);
       refreshQuote(position.tokenAddress);
       setNotice("Mình đã load coin này. Bấm Close 100% lần nữa sau khi giá hiện tại hiện lên.");
       return;
     }
-    const fillPrice = executionPriceFor("sell", quote.priceSol, null, fees);
-    const result = applySell(positions, quote, 100, fillPrice, fees, "market");
+    const fillPrice = executionPriceFor("sell", positionQuote.priceSol, null, fees);
+    const result = applySell(positions, positionQuote, 100, fillPrice, fees, "market");
     setPositions(result.positions);
     setAccount((current) => ({ ...current, cashSol: current.cashSol + result.trade.grossSol - result.trade.feesSol }));
     setTrades((current) => [result.trade, ...current].slice(0, 80));
-    setNotice(`Đã đóng 100% vị thế ${quote.symbol}.`);
+    setNotice(`Đã đóng 100% vị thế ${positionQuote.symbol}.`);
   };
 
   const resetCapital = () => {
@@ -634,6 +683,7 @@ function App() {
     setAccount((current) => ({ ...current, cashSol: current.startingCapitalSol }));
     setCapitalInput(account.startingCapitalSol);
     setQuote(null);
+    setActiveTokenAddress("");
     setContractAddress("");
     setLimitBuyMarketCapUsd(0);
     setLimitSellMarketCapUsd(0);
@@ -641,11 +691,11 @@ function App() {
     setNotice("Paper journal đã reset.");
   };
 
-  const quoteMarketCap = currentMarketCapUsd(quote);
-  const limitBuyPrice = marketCapToPriceSol(limitBuyMarketCapUsd, quote);
-  const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, quote);
+  const quoteMarketCap = currentMarketCapUsd(activeQuote);
+  const limitBuyPrice = marketCapToPriceSol(limitBuyMarketCapUsd, activeQuote);
+  const limitSellPrice = marketCapToPriceSol(limitSellMarketCapUsd, activeQuote);
   const currentMarketCapLine = quoteMarketCap ? `MC ${fmtCompactUsd(quoteMarketCap)}` : "Paste CA để load MC";
-  const remainingMs = quote ? refreshRemainingMs : refreshIntervalMs;
+  const remainingMs = activeQuote ? refreshRemainingMs : refreshIntervalMs;
   const progressRatio = Math.max(0, Math.min(1, remainingMs / refreshIntervalMs));
   const refreshRingRadius = 15;
   const circumference = 2 * Math.PI * refreshRingRadius;
@@ -777,11 +827,11 @@ function App() {
         <button type="submit" disabled={loadingQuote}>{loadingQuote ? "Loading..." : "Load price"}</button>
         <div className="price-ticker">
           <div className="ticker-copy">
-            <span>{quote?.symbol ?? "Current MC"}</span>
+            <span>{activeQuote?.symbol ?? "Current MC"}</span>
             <strong>{currentMarketCapLine}</strong>
-            <small>{quote ? `Updated ${dateLabel(quote.updatedAt)}` : "MC loading"}</small>
+            <small>{activeQuote ? `Updated ${dateLabel(activeQuote.updatedAt)}` : "MC loading"}</small>
           </div>
-          {quote ? (
+          {activeQuote ? (
             <span
               aria-label={`Còn ${refreshSeconds} giây trước lần cập nhật tiếp theo`}
               className="refresh-indicator"
@@ -832,15 +882,15 @@ function App() {
         <aside className="panel order-ticket">
           <div className="panel-heading">
             <h2>Order Ticket</h2>
-            <span>{quote?.dexId ?? "DEX"}</span>
+            <span>{activeQuote?.dexId ?? "DEX"}</span>
           </div>
 
           <div className="ticket-section">
             <h3>Market</h3>
             <NumberInput label="Buy capital" value={buyCapital} onChange={setBuyCapital} suffix="SOL" />
-            <button type="button" disabled={!quote || account.cashSol < buyCapital + currentOrderFeesSol} onClick={marketBuy}>Buy Market</button>
+            <button type="button" disabled={!activeQuote || account.cashSol < buyCapital + currentOrderFeesSol} onClick={marketBuy}>Buy Market</button>
             <NumberInput label="Sell position" value={sellPercent} onChange={setSellPercent} suffix="%" />
-            <button type="button" className="sell" disabled={!quote || selectedTotals.tokenAmount <= 0} onClick={marketSell}>Sell Market</button>
+            <button type="button" className="sell" disabled={!activeQuote || selectedTotals.tokenAmount <= 0} onClick={marketSell}>Sell Market</button>
           </div>
 
           <div className="ticket-section">
@@ -848,9 +898,10 @@ function App() {
             <NumberInput label="Limit market cap" value={limitBuyMarketCapUsd} onChange={setLimitBuyMarketCapUsd} suffix="USD MC" />
             <p className="preview">
               Current MC: {quoteMarketCap ? fmtCompactUsd(quoteMarketCap) : "n/a"} / implied price {limitBuyPrice ? fmtSol(limitBuyPrice) : "n/a"}
+              {limitBuyCapital > 0 ? ` / reserve ${fmtSol(limitBuyCapital + currentOrderFeesSol)}` : ""}
             </p>
             <NumberInput label="Capital" value={limitBuyCapital} onChange={setLimitBuyCapital} suffix="SOL" />
-            <button type="button" disabled={!quote || !limitBuyPrice || account.cashSol < limitBuyCapital + currentOrderFeesSol} onClick={placeLimitBuy}>Place Limit Buy</button>
+            <button type="button" disabled={!activeQuote || !limitBuyPrice || limitBuyCapital <= 0} onClick={placeLimitBuy}>Place Limit Buy</button>
           </div>
 
           <div className="ticket-section">
@@ -871,7 +922,7 @@ function App() {
             <p className="preview">
               Est. sell value: {displayValue((selectedTotals.tokenAmount * limitSellPrice * (sellSizingMode === "value" && selectedTotals.tokenAmount * limitSellPrice > 0 ? Math.min(100, (limitSellValue / (selectedTotals.tokenAmount * limitSellPrice)) * 100) : limitSellPercent)) / 100)}
             </p>
-            <button type="button" className="sell" disabled={!quote || !limitSellPrice || selectedTotals.tokenAmount <= 0} onClick={placeLimitSell}>Place Limit Sell</button>
+            <button type="button" className="sell" disabled={!activeQuote || !limitSellPrice || selectedTotals.tokenAmount <= 0} onClick={placeLimitSell}>Place Limit Sell</button>
           </div>
         </aside>
 
@@ -898,14 +949,35 @@ function App() {
                   <tr><td colSpan={7} className="empty">Chưa có vị thế. Paste CA và thử một market/limit buy.</td></tr>
                 ) : (
                   positions.map((position) => {
-                    const isSelected = quote?.address === position.tokenAddress;
+                    const isSelected = activeAddress === position.tokenAddress;
                     const positionQuote = quotesByAddress[position.tokenAddress];
                     const current = positionQuote?.priceSol;
                     const totals = totalsForPosition(position, current);
                     return (
-                      <tr key={position.tokenAddress} className={isSelected ? "selected-row" : ""}>
+                      <tr
+                        key={position.tokenAddress}
+                        aria-selected={isSelected}
+                        className={`position-row${isSelected ? " selected-row" : ""}`}
+                        onClick={() => selectPosition(position)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            selectPosition(position);
+                          }
+                        }}
+                        tabIndex={0}
+                      >
                         <td>
-                          <button type="button" className="link-button" onClick={() => refreshQuote(position.tokenAddress)}>{position.tokenSymbol}</button>
+                          <button
+                            type="button"
+                            className="link-button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              selectPosition(position);
+                            }}
+                          >
+                            {position.tokenSymbol}
+                          </button>
                           <small>{position.tokenAddress.slice(0, 4)}...{position.tokenAddress.slice(-4)}</small>
                         </td>
                         <td>{fmt(totals.tokenAmount, 4)}</td>
@@ -923,7 +995,18 @@ function App() {
                           <small>Realized {displayValue(totals.realizedPnlSol)}</small>
                         </td>
                         <td>{position.lots.length}</td>
-                        <td><button type="button" className="ghost" onClick={() => closePosition(position)}>Close 100%</button></td>
+                        <td>
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              closePosition(position);
+                            }}
+                          >
+                            Close 100%
+                          </button>
+                        </td>
                       </tr>
                     );
                   })
@@ -951,19 +1034,19 @@ function App() {
 
         <aside className="panel detail-panel">
           <div className="panel-heading">
-            <h2>{quote ? `${quote.symbol} Detail` : "Coin Detail"}</h2>
-            <span>{quote?.liquidityUsd ? `Liq ${fmtUsd(quote.liquidityUsd)}` : "No chart"}</span>
+            <h2>{activeQuote ? `${activeQuote.symbol} Detail` : "Coin Detail"}</h2>
+            <span>{activeQuote?.liquidityUsd ? `Liq ${fmtUsd(activeQuote.liquidityUsd)}` : "No chart"}</span>
           </div>
 
           <div className="stats">
             <div>
               <span>Current MC</span>
               <strong>{quoteMarketCap ? fmtCompactUsd(quoteMarketCap) : "--"}</strong>
-              <small>{quote ? `${fmtSol(quote.priceSol)} / token` : "Price n/a"}</small>
+              <small>{activeQuote ? `${fmtSol(activeQuote.priceSol)} / token` : "Price n/a"}</small>
             </div>
             <div>
               <span>Entry basis</span>
-              <strong>{priceToMarketCapLabel(selectedTotals.avgEntrySol, quote)}</strong>
+              <strong>{priceToMarketCapLabel(selectedTotals.avgEntrySol, activeQuote)}</strong>
               <small>{fmtSol(selectedTotals.avgEntrySol)} / {selectedPosition?.lots.length ?? 0} buy lots</small>
             </div>
             <div>
@@ -988,12 +1071,12 @@ function App() {
                 </div>
                 <div>
                   <span>Entry</span>
-                  <strong>{priceToMarketCapLabel(lot.entryPriceSol, quote)}</strong>
+                  <strong>{priceToMarketCapLabel(lot.entryPriceSol, activeQuote)}</strong>
                   <small>{fmtSol(lot.entryPriceSol)}</small>
                 </div>
                 <div>
                   <span>Basis</span>
-                  <strong>{priceToMarketCapLabel(lot.costBasisSol / lot.tokenAmount, quote)}</strong>
+                  <strong>{priceToMarketCapLabel(lot.costBasisSol / lot.tokenAmount, activeQuote)}</strong>
                   <small>{fmtSol(lot.costBasisSol / lot.tokenAmount)}</small>
                 </div>
               </div>
@@ -1002,11 +1085,11 @@ function App() {
 
           <h3>Recent Fills</h3>
           <div className="fills">
-            {trades.length === 0 ? <p className="empty">Fills sẽ hiện ở đây.</p> : trades.slice(0, 8).map((trade) => (
+            {activeTrades.length === 0 ? <p className="empty">Fills sẽ hiện ở đây.</p> : activeTrades.slice(0, 8).map((trade) => (
               <div className="fill" key={trade.id}>
                 <strong className={trade.side === "buy" ? "buy-text" : "sell-text"}>{trade.side.toUpperCase()} {trade.tokenSymbol}</strong>
                 <div>
-                  <span>{priceToMarketCapLabel(trade.priceSol, quote?.address === trade.tokenAddress ? quote : null)}</span>
+                  <span>{priceToMarketCapLabel(trade.priceSol, activeQuote?.address === trade.tokenAddress ? activeQuote : null)}</span>
                   <small>{trade.type} / {dateLabel(trade.createdAt)}</small>
                 </div>
                 {trade.realizedPnlSol !== undefined ? <em className={trade.realizedPnlSol >= 0 ? "positive" : "negative"}>{displayValue(trade.realizedPnlSol)}</em> : null}
@@ -1014,7 +1097,7 @@ function App() {
             ))}
           </div>
 
-          {quote?.url ? <a className="dex-link" href={quote.url} target="_blank" rel="noreferrer">Open pair on DEX Screener</a> : null}
+          {activeQuote?.url ? <a className="dex-link" href={activeQuote.url} target="_blank" rel="noreferrer">Open pair on DEX Screener</a> : null}
         </aside>
       </section>
     </main>
