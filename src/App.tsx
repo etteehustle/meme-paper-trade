@@ -729,6 +729,23 @@ function App() {
               SOL
             </button>
           </div>
+          <div className="settings-section-heading">
+            <span>Trading fees</span>
+            <small>Applied to every order</small>
+          </div>
+          <div className="fee-box settings-fees">
+            <NumberInput label="Slippage giả lập" value={fees.slippagePct} onChange={(value) => setFees({ ...fees, slippagePct: value })} suffix="%" />
+            <NumberInput label="Bribe fee" value={fees.bribeSol} onChange={(value) => setFees({ ...fees, bribeSol: value })} suffix="SOL" />
+            <NumberInput label="Tx fee" value={fees.txFeeSol} onChange={(value) => setFees({ ...fees, txFeeSol: value })} suffix="SOL" />
+          </div>
+          <div className="settings-section-heading">
+            <span>Paper account</span>
+            <small>Starting balance</small>
+          </div>
+          <div className="settings-capital">
+            <NumberInput label="Starting capital" value={capitalInput} onChange={setCapitalInput} suffix="SOL" />
+            <button type="button" className="ghost" onClick={resetCapital}>Reset capital</button>
+          </div>
           <button type="button" className="ghost danger" onClick={resetJournal}>Reset</button>
           <button type="button" className="ghost logout-button" disabled={authBusy} onClick={signOutFromCloud}>Logout</button>
         </div>
@@ -791,10 +808,6 @@ function App() {
       {notice ? <div className="alert success">{notice}</div> : null}
 
       <section className="capital-panel">
-        <div className="capital-control">
-          <NumberInput label="Tổng vốn giả lập" value={capitalInput} onChange={setCapitalInput} suffix="SOL" />
-          <button type="button" className="ghost" onClick={resetCapital}>Reset capital</button>
-        </div>
         <div className="capital-metrics">
           <div>
             <span>Cash available</span>
@@ -820,12 +833,6 @@ function App() {
           <div className="panel-heading">
             <h2>Order Ticket</h2>
             <span>{quote?.dexId ?? "DEX"}</span>
-          </div>
-
-          <div className="fee-box">
-            <NumberInput label="Slippage giả lập" value={fees.slippagePct} onChange={(value) => setFees({ ...fees, slippagePct: value })} suffix="%" />
-            <NumberInput label="Bribe fee" value={fees.bribeSol} onChange={(value) => setFees({ ...fees, bribeSol: value })} suffix="SOL" />
-            <NumberInput label="Tx fee" value={fees.txFeeSol} onChange={(value) => setFees({ ...fees, txFeeSol: value })} suffix="SOL" />
           </div>
 
           <div className="ticket-section">
