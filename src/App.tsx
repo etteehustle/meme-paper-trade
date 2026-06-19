@@ -84,6 +84,7 @@ function NumberInput({
 function App() {
   const [contractAddress, setContractAddress] = useState(() => loadLastAddress());
   const [quote, setQuote] = useState<TokenQuote | null>(null);
+  const [quotesByAddress, setQuotesByAddress] = useState<Record<string, TokenQuote>>({});
   const [solUsd, setSolUsd] = useState<number | null>(null);
   const [loadingQuote, setLoadingQuote] = useState(false);
   const [quoteError, setQuoteError] = useState("");
@@ -122,17 +123,26 @@ function App() {
   );
   const selectedTotals = useMemo(() => totalsForPosition(selectedPosition, quote?.priceSol), [selectedPosition, quote?.priceSol]);
   const openOrders = useMemo(() => orders.filter((order) => order.status === "open"), [orders]);
+  const trackedTokenAddresses = useMemo(() => {
+    return Array.from(
+      new Set([
+        ...positions.map((position) => position.tokenAddress),
+        ...openOrders.map((order) => order.tokenAddress),
+        ...(quote?.address ? [quote.address] : []),
+      ]),
+    ).filter(Boolean);
+  }, [openOrders, positions, quote?.address]);
   const reservedSol = useMemo(
     () => openOrders.reduce((sum, order) => sum + (order.side === "buy" ? order.reservedSol ?? order.capitalSol ?? 0 : 0), 0),
     [openOrders],
   );
   const totalPositionValueSol = useMemo(() => {
     return positions.reduce((sum, position) => {
-      const currentPrice = quote?.address === position.tokenAddress ? quote.priceSol : undefined;
+      const currentPrice = quotesByAddress[position.tokenAddress]?.priceSol;
       const totals = totalsForPosition(position, currentPrice);
       return sum + (currentPrice ? totals.marketValueSol : totals.costBasisSol);
     }, 0);
-  }, [positions, quote]);
+  }, [positions, quotesByAddress]);
   const equitySol = account.cashSol + reservedSol + totalPositionValueSol;
   const accountPnlSol = equitySol - account.startingCapitalSol;
   const currentOrderFeesSol = totalFees(fees);
@@ -305,6 +315,11 @@ function App() {
     if (next) setSolUsd(next);
   }, []);
 
+  const storeQuote = useCallback((next: TokenQuote) => {
+    setQuotesByAddress((current) => ({ ...current, [next.address]: next }));
+    setQuote((current) => (current?.address === next.address ? next : current));
+  }, []);
+
   const refreshQuote = useCallback(
     async (address = contractAddress) => {
       if (!address.trim()) return;
@@ -314,6 +329,7 @@ function App() {
         const next = await fetchTokenQuote(address, solUsd ?? undefined);
         const nextMarketCap = currentMarketCapUsd(next);
         setQuote(next);
+        setQuotesByAddress((current) => ({ ...current, [next.address]: next }));
         setContractAddress(next.address);
         if (nextMarketCap) {
           setLimitBuyMarketCapUsd(nextMarketCap);
@@ -335,10 +351,27 @@ function App() {
   }, [refreshSol]);
 
   useEffect(() => {
-    if (!quote) return;
-    const id = window.setInterval(() => refreshQuote(quote.address), refreshIntervalMs);
-    return () => window.clearInterval(id);
-  }, [quote, refreshQuote]);
+    if (!cloudUserId || trackedTokenAddresses.length === 0) return;
+    let cancelled = false;
+
+    const refreshTrackedQuotes = async () => {
+      const results = await Promise.allSettled(
+        trackedTokenAddresses.map((address) => fetchTokenQuote(address, solUsd ?? undefined)),
+      );
+      if (cancelled) return;
+
+      results.forEach((result) => {
+        if (result.status === "fulfilled") storeQuote(result.value);
+      });
+    };
+
+    refreshTrackedQuotes();
+    const id = window.setInterval(refreshTrackedQuotes, refreshIntervalMs);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [cloudUserId, solUsd, storeQuote, trackedTokenAddresses]);
 
   useEffect(() => {
     if (!quote) {
@@ -363,8 +396,13 @@ function App() {
   }, [cloudUserId, contractAddress, refreshQuote]);
 
   useEffect(() => {
-    if (!quote || fillLockRef.current) return;
-    const fillable = orders.filter((order) => shouldFill(order, quote));
+    if (fillLockRef.current) return;
+    const fillable = openOrders
+      .map((order) => ({ order, orderQuote: quotesByAddress[order.tokenAddress] }))
+      .filter(
+        (item): item is { order: LimitOrder; orderQuote: TokenQuote } =>
+          Boolean(item.orderQuote) && shouldFill(item.order, item.orderQuote),
+      );
     if (fillable.length === 0) return;
 
     fillLockRef.current = true;
@@ -372,24 +410,27 @@ function App() {
     let nextCashSol = account.cashSol;
     const nextTrades: TradeEvent[] = [];
     const filledIds = new Set<string>();
+    const fillMarketPrices = new Map<string, number>();
 
-    for (const order of fillable) {
+    for (const { order, orderQuote } of fillable) {
       try {
-        const fillPrice = executionPriceFor(order.side, quote.priceSol, order.limitPriceSol, fees);
+        const fillPrice = executionPriceFor(order.side, orderQuote.priceSol, order.limitPriceSol, fees);
         if (order.side === "buy" && order.capitalSol) {
           const buyFees = { ...fees, bribeSol: order.reservedFeesSol ?? totalFees(fees), txFeeSol: 0 };
-          const result = applyBuy(nextPositions, quote, order.capitalSol, fillPrice, buyFees, "limit");
+          const result = applyBuy(nextPositions, orderQuote, order.capitalSol, fillPrice, buyFees, "limit");
           nextPositions = result.positions;
           nextTrades.push(result.trade);
           filledIds.add(order.id);
+          fillMarketPrices.set(order.id, orderQuote.priceSol);
         }
 
         if (order.side === "sell" && order.sellPercent) {
-          const result = applySell(nextPositions, quote, order.sellPercent, fillPrice, fees, "limit");
+          const result = applySell(nextPositions, orderQuote, order.sellPercent, fillPrice, fees, "limit");
           nextPositions = result.positions;
           nextTrades.push(result.trade);
           nextCashSol += result.trade.grossSol - result.trade.feesSol;
           filledIds.add(order.id);
+          fillMarketPrices.set(order.id, orderQuote.priceSol);
         }
       } catch {
         // A stale sell limit can become impossible if the position was closed by another order.
@@ -403,7 +444,7 @@ function App() {
       setOrders((current) =>
         current.map((order) =>
           filledIds.has(order.id)
-            ? { ...order, status: "filled", filledAt: Date.now(), fillPriceSol: quote.priceSol }
+            ? { ...order, status: "filled", filledAt: Date.now(), fillPriceSol: fillMarketPrices.get(order.id) ?? order.fillPriceSol }
             : order,
         ),
       );
@@ -412,7 +453,7 @@ function App() {
     window.setTimeout(() => {
       fillLockRef.current = false;
     }, 0);
-  }, [account.cashSol, fees, orders, positions, quote]);
+  }, [account.cashSol, fees, openOrders, positions, quotesByAddress]);
 
   useEffect(() => {
     if (!quote || sellSizingMode !== "percent") return;
@@ -773,7 +814,8 @@ function App() {
                 ) : (
                   positions.map((position) => {
                     const isSelected = quote?.address === position.tokenAddress;
-                    const current = isSelected ? quote?.priceSol : undefined;
+                    const positionQuote = quotesByAddress[position.tokenAddress];
+                    const current = positionQuote?.priceSol;
                     const totals = totalsForPosition(position, current);
                     return (
                       <tr key={position.tokenAddress} className={isSelected ? "selected-row" : ""}>
@@ -783,8 +825,8 @@ function App() {
                         </td>
                         <td>{fmt(totals.tokenAmount, 4)}</td>
                         <td>
-                          {priceToMarketCapLabel(totals.avgEntrySol, isSelected ? quote : null)}
-                          {isSelected ? <small>{fmtSol(totals.avgEntrySol)}</small> : null}
+                          {priceToMarketCapLabel(totals.avgEntrySol, positionQuote ?? null)}
+                          {positionQuote ? <small>{fmtSol(totals.avgEntrySol)}</small> : null}
                         </td>
                         <td>{current ? displayValue(totals.marketValueSol) : "Load price"}</td>
                         <td>
@@ -813,9 +855,9 @@ function App() {
             {openOrders.length === 0 ? <p className="empty">Chưa có limit order đang chờ.</p> : openOrders.map((order) => (
               <div className="order-row" key={order.id}>
                 <strong className={order.side === "buy" ? "buy-text" : "sell-text"}>{order.side.toUpperCase()} {order.tokenSymbol}</strong>
-                <span>@ {orderLimitLabel(order, quote)}</span>
+                <span>@ {orderLimitLabel(order, quotesByAddress[order.tokenAddress] ?? null)}</span>
                 <span>{order.side === "buy" ? `${fmtSol(order.capitalSol ?? 0)} capital` : `${fmtPct(order.sellPercent ?? 0)} position`}</span>
-                <small>{orderEntryNote(order, quote)}</small>
+                <small>{orderEntryNote(order, quotesByAddress[order.tokenAddress] ?? null)}</small>
                 <button type="button" className="ghost" onClick={() => cancelOrder(order.id)}>Cancel</button>
               </div>
             ))}
